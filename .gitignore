@@ -1,0 +1,6 @@
+.env
+__pycache__/
+
+chroma_db/
+
+snomed_cardio_subset2.csv

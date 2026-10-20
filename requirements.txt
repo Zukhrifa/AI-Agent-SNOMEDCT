@@ -1,0 +1,7 @@
+streamlit
+langchain
+langchain-chroma
+langchain-google-genai
+pandas
+streamlit-mic-recorder
+python-dotenv
