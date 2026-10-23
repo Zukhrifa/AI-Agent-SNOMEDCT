@@ -2,6 +2,8 @@ streamlit
 langchain
 langchain-chroma
 langchain-google-genai
+langchain-community
+langchain-huggingface
 pandas
 streamlit-mic-recorder
 python-dotenv
