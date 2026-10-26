@@ -1,28 +1,32 @@
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+import streamlit as st
 
-def get_snomed_retriever(k=3):
+@st.cache_resource
+def get_cached_embeddings():
     """
-    Menginisialisasi dan mengembalikan retriever dari ChromaDB lokal
-    untuk pencarian istilah medis SNOMED CT.
+    Memuat model embedding HuggingFace SEKALI SAJA dan menyimpannya di cache memory.
+    Membuat proses pencarian menjadi instan tanpa reload berulang.
     """
-    # Menggunakan model embedding lokal yang sama saat proses ingest
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    
-    # Memuat database vektor dari folder lokal
-    vectorstore = Chroma(
+    return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+@st.cache_resource
+def get_cached_vectorstore():
+    """
+    Memuat koneksi ChromaDB lokal SEKALI SAJA ke dalam cache memory.
+    """
+    embeddings = get_cached_embeddings()
+    return Chroma(
         persist_directory="./chroma_db",
         embedding_function=embeddings
     )
-    
-    # Mengubah vectorstore menjadi retriever dengan top-k hasil relevan
-    retriever = vectorstore.as_retriever(search_kwargs={"k": k})
-    return retriever
 
 def search_medical_term(query: str, k=3):
     """
-    Fungsi helper untuk mencari terminologi medis berdasarkan input teks bebas.
+    Fungsi helper pencarian terminologi medis yang sekarang sudah ngebut 
+    karena menggunakan instance cache global.
     """
-    retriever = get_snomed_retriever(k=k)
+    vectorstore = get_cached_vectorstore()
+    retriever = vectorstore.as_retriever(search_kwargs={"k": k})
     docs = retriever.invoke(query)
     return docs

@@ -44,13 +44,30 @@ def render_sidebar():
     # --- MANAJEMEN DAFTAR PASIEN / CHAT HISTORY ---
     st.sidebar.subheader("📋 Daftar Pasien")
     
+    # Tombol Buat Konsultasi Baru
     if st.sidebar.button("➕ Pasien / Konsultasi Baru", use_container_width=True):
+        # Reset state untuk chat baru, tapi JANGAN hapus patient_list!
         st.session_state.active_patient = None
         st.session_state.messages = []
         st.session_state.quick_actions = []
         st.rerun()
 
     st.sidebar.markdown("---")
+    st.sidebar.subheader("📋 Riwayat Daftar Pasien")
+
+    # Menampilkan daftar riwayat pasien yang pernah dibuat
+    if not st.session_state.patient_list:
+        st.sidebar.info("Belum ada riwayat pasien tersimpan.")
+    else:
+        for idx, pat in enumerate(st.session_state.patient_list):
+            # Tombol untuk membuka kembali roomchat pasien lama
+            btn_label = f"👤 {pat['name']} ({pat.get('mrn', 'MRN')})"
+            if st.sidebar.button(btn_label, key=f"history_pat_{idx}", use_container_width=True):
+                # Muat ulang data pasien yang dipilih ke layar utama
+                st.session_state.active_patient = pat
+                st.session_state.messages = pat.get("messages", [])
+                st.session_state.quick_actions = pat.get("quick_actions", [])
+                st.rerun()
 
     if "patient_list" not in st.session_state:
         st.session_state.patient_list = []
