@@ -1,2 +1,6 @@
 run streamlit: py -m streamlit run app.py
 cek chroma: py check_chroma.py
+git add .
+git status
+git commit -m "test"
+git push -u origin main
