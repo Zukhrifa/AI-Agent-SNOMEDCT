@@ -5,22 +5,25 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from modules.rag_snomed import search_medical_term
-import os
 import streamlit as st
-import google.generativeai as genai
 
-api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
-
-genai.configure(api_key=api_key)
 load_dotenv()
 
 def get_llm():
-    api_key = os.getenv("GOOGLE_API_KEY")
+    # Prioritaskan API Key dari input manual user di sidebar (st.session_state), 
+    # kemudian dari Streamlit secrets, lalu file .env / os.environ
+    api_key = (
+        st.session_state.get("custom_api_key") 
+        or st.secrets.get("GEMINI_API_KEY", "") 
+        or os.getenv("GOOGLE_API_KEY") 
+        or os.getenv("GEMINI_API_KEY")
+    )
+    
     if not api_key:
-        raise ValueError("GOOGLE_API_KEY tidak ditemukan di file .env!")
+        raise ValueError("API Key belum ditemukan! Silakan masukkan API Key di sidebar atau file .env.")
         
     return ChatGoogleGenerativeAI(
-        model="gemini-3.8-flash",  # Menggunakan model flash yang lebih stabil dan cepat untuk free tier
+        model="gemini-3.8-flash",  # Menggunakan model flash yang lebih stabil dan cepat
         google_api_key=api_key,
         temperature=0.3,
         max_output_tokens=400
@@ -42,7 +45,10 @@ def extract_text_from_response(response_content):
     return str(response_content)
 
 def generate_anamnesis_response(user_input: str, chat_history: list):
-    llm = get_llm()
+    try:
+        llm = get_llm()
+    except ValueError as e:
+        return str(e), []
     
     # RAG pencarian SNOMED CT
     retrieved_docs = search_medical_term(user_input, k=2)
@@ -85,8 +91,11 @@ FORMAT OUTPUT WAJIB:
             
     messages.append(HumanMessage(content=user_input))
     
-    response = llm.invoke(messages)
-    raw_text = extract_text_from_response(response.content)
+    try:
+        response = llm.invoke(messages)
+        raw_text = extract_text_from_response(response.content)
+    except Exception as e:
+        return f"Terjadi kesalahan saat memanggil LLM: {str(e)}", []
     
     text_response = raw_text
     quick_actions = [
