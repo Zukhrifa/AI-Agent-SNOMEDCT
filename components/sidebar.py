@@ -4,8 +4,8 @@ import google.generativeai as genai
 def render_sidebar():
     st.sidebar.title("Pengaturan & Pasien")
     
-    # --- FITUR INPUT & VALIDASI API KEY MANUAL ---
-    st.sidebar.subheader("Gemini API Key")
+    # --- FITUR INPUT & VALIDASI API KEY REAL ---
+    st.sidebar.subheader(" Gemini API Key")
     user_api_key = st.sidebar.text_input(
         "Masukkan API Key Anda:",
         value=st.session_state.get("custom_api_key", ""),
@@ -13,19 +13,21 @@ def render_sidebar():
         help="Dapatkan API key dari Google AI Studio."
     )
     
-    # Tombol atau logika cek keaktifan API Key
     if user_api_key:
-        # Cek apakah API Key valid dengan melakukan tes panggilan ringan ke Gemini
         try:
+            # Konfigurasi dan lakukan test panggil model secara nyata (real request)
             genai.configure(api_key=user_api_key)
-            # Tes model ringan untuk verifikasi kunci
             model = genai.GenerativeModel("gemini-1.5-flash")
-            # Cek cepat (hanya inisialisasi / bisa test generate kecil)
-            st.session_state["custom_api_key"] = user_api_key
-            st.sidebar.success("API Key aktif dan valid!", icon="✅")
+            
+            # Melakukan tes generate singkat untuk memastikan kunci benar-benar valid
+            response = model.generate_content("test")
+            
+            if response:
+                st.session_state["custom_api_key"] = user_api_key
+                st.sidebar.success("API Key aktif dan valid! ", icon="✅")
         except Exception as e:
-            st.sidebar.error("API Key tidak valid atau salah! ❌", icon="❌")
-            # Hapus atau kosongkan jika tidak valid agar tidak merusak sesi
+            # Jika kunci ngawur/salah, blok try akan gagal dan masuk ke sini
+            st.sidebar.error("API Key salah atau tidak valid! ", icon="❌")
             if "custom_api_key" in st.session_state:
                 del st.session_state["custom_api_key"]
     else:
