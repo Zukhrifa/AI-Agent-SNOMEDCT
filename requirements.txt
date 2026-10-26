@@ -7,3 +7,6 @@ langchain-huggingface
 pandas
 streamlit-mic-recorder
 python-dotenv
+langchain-core
+sentence-transformers
+google-generativeai
