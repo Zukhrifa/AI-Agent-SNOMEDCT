@@ -10,21 +10,21 @@ import streamlit as st
 load_dotenv()
 
 def get_llm():
-    env_api_key = ""
-    try:
-        env_api_key = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        pass
-        
-    api_key = (
-        env_api_key 
-        or os.getenv("GOOGLE_API_KEY") 
-        or os.getenv("GEMINI_API_KEY")
-        or st.session_state.get("custom_api_key", "")
-    )
+    # PRIORITASKAN input manual dari sidebar terlebih dahulu!
+    api_key = st.session_state.get("custom_api_key", "")
+    
+    # Jika di sidebar kosong, baru cek dari .env atau st.secrets
+    if not api_key:
+        try:
+            api_key = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception:
+            pass
+            
+    if not api_key:
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
     
     if not api_key:
-        raise ValueError("API Key belum ditemukan! Mohon masukkan API Key di file .env atau melalui menu Pengaturan di sidebar.")
+        raise ValueError("API Key belum ditemukan! Mohon masukkan API Key di menu Pengaturan sidebar.")
         
     return ChatGoogleGenerativeAI(
         model="gemini-3.8-flash",
