@@ -5,7 +5,13 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from modules.rag_snomed import search_medical_term
+import os
+import streamlit as st
+import google.generativeai as genai
 
+api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+genai.configure(api_key=api_key)
 load_dotenv()
 
 def get_llm():
