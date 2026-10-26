@@ -1,29 +1,49 @@
 import streamlit as st
+import os
 
 def render_sidebar():
-    st.sidebar.title(" Pengaturan & Pasien")
+    st.sidebar.title("Pengaturan & Pasien")
     
-    # --- FITUR INPUT API KEY MANUAL ---
-    st.sidebar.subheader("Gemini API Key")
-    user_api_key = st.sidebar.text_input(
-        "Masukkan API Key Anda:",
-        value=st.session_state.get("custom_api_key", ""),
-        type="password",
-        help="Dapatkan API key dari Google AI Studio."
-    )
+    # Ambil API key secara aman tanpa membuat error jika file secrets.toml tidak ada di lokal
+    env_api_key = ""
+    try:
+        env_api_key = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        pass
     
-    if user_api_key:
-        st.session_state["custom_api_key"] = user_api_key
-        st.sidebar.success("API Key disimpan!", icon="✅")
+    # Jika tidak ada di secrets, ambil dari environment variable (.env)
+    if not env_api_key:
+        env_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+
+    st.sidebar.subheader(" Gemini API Key")
+    if env_api_key:
+        st.sidebar.success("API Key terdeteksi otomatis dari sistem ", icon="✅")
+        with st.sidebar.expander("Ganti API Key secara manual (Opsional)"):
+            user_api_key = st.text_input(
+                "Custom API Key:",
+                value=st.session_state.get("custom_api_key", ""),
+                type="password"
+            )
+            if user_api_key:
+                st.session_state["custom_api_key"] = user_api_key
     else:
-        st.sidebar.warning("Masukkan API Key untuk menggunakan AI.", icon="⚠️")
+        user_api_key = st.sidebar.text_input(
+            "Masukkan API Key Anda:",
+            value=st.session_state.get("custom_api_key", ""),
+            type="password",
+            help="Dapatkan API key dari Google AI Studio."
+        )
+        if user_api_key:
+            st.session_state["custom_api_key"] = user_api_key
+            st.sidebar.success("API Key manual disimpan!", icon="✅")
+        else:
+            st.sidebar.warning("API Key belum diatur di .env maupun sidebar.", icon="⚠️")
         
     st.sidebar.divider()
     
     # --- MANAJEMEN DAFTAR PASIEN / CHAT HISTORY ---
     st.sidebar.subheader("📋 Daftar Pasien")
     
-    # Tombol Buat Konsultasi Baru
     if st.sidebar.button("➕ Pasien / Konsultasi Baru", use_container_width=True):
         st.session_state.active_patient = None
         st.session_state.messages = []
@@ -32,7 +52,6 @@ def render_sidebar():
 
     st.sidebar.markdown("---")
 
-    # Simulasi Daftar Riwayat Pasien
     if "patient_list" not in st.session_state:
         st.session_state.patient_list = []
 

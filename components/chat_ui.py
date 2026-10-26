@@ -25,8 +25,8 @@ def render_chat_room():
         if msg["role"] == "user":
             # Bubble User di Sisi Kanan (Biru)
             st.markdown(f"""
-                <div style="display: flex; justify-content: flex-end; margin-bottom: 16px;">
-                    <div style="background-color: #2563eb; color: white; padding: 14px 18px; border-radius: 18px 18px 2px 18px; max-width: 80%; font-size: 14px; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
+                    <div style="background-color: #2b5797; color: white; padding: 10px 15px; border-radius: 15px; max-width: 70%;">
                         {msg['content']}
                     </div>
                 </div>
@@ -67,7 +67,6 @@ def render_chat_room():
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
     # --- WIDGET VOICE TYPING SISTEM (WEB SPEECH API) ---
-    # Memungkinkan Anda mendikte suara ke teks bahasa Indonesia secara kumulatif
     voice_typing_widget = """
     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
         <button id="micBtn" onclick="toggleVoiceTyping()" style="background-color: #ffffff; border: 1px solid #cbd5e1; color: #334155; padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.02);">
@@ -93,7 +92,7 @@ def render_chat_room():
             if (!isListening) {
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 recognition = new SpeechRecognition();
-                recognition.lang = 'id-ID'; // Bahasa Indonesia
+                recognition.lang = 'id-ID';
                 recognition.interimResults = true;
                 recognition.continuous = true;
 
@@ -114,7 +113,6 @@ def render_chat_room():
                     }
                     if (finalTranscript !== '') {
                         status.innerText = "Teks terekam: " + finalTranscript;
-                        // Kirim otomatis teks hasil suara ke parameter Streamlit untuk diproses
                         window.parent.location.search = "?voice_msg=" + encodeURIComponent(finalTranscript);
                     }
                 };
@@ -147,15 +145,13 @@ def render_chat_room():
         send_user_message(voice_text)
         st.rerun()
 
-    # --- KOTAK INPUT UTAMA (STREAMLIT CHAT INPUT) ---
-    # Dijamin 100% stabil, tombol kirim & Enter berfungsi sempurna, masuk ke bubble kanan
+    # --- KOTAK INPUT UTAMA ---
     user_input = st.chat_input("Type your message...")
     if user_input:
         send_user_message(user_input)
         st.rerun()
 
 def send_user_message(text):
-    # Simpan pesan user ke riwayat sesi dan tampil di bubble kanan
     st.session_state.messages.append({"role": "user", "content": text})
     
     with st.spinner("AI sedang menganalisis anamnesis..."):
@@ -164,11 +160,9 @@ def send_user_message(text):
             st.session_state.messages[:-1]
         )
         
-    # Simpan balasan AI dan tampil di bubble kiri
     st.session_state.messages.append({"role": "assistant", "content": ai_reply})
     st.session_state.quick_actions = next_actions
     
-    # Sinkronisasi ke data pasien agar riwayat tersimpan permanen di sidebar
     if st.session_state.active_patient:
         st.session_state.active_patient["messages"] = st.session_state.messages
         st.session_state.active_patient["last_msg"] = text
