@@ -1,10 +1,10 @@
 import streamlit as st
 
 def render_sidebar():
-    st.sidebar.title("⚙️ Pengaturan & Pasien")
+    st.sidebar.title(" Pengaturan & Pasien")
     
     # --- FITUR INPUT API KEY MANUAL (ALA JANITOR AI) ---
-    st.sidebar.subheader("🔑 Gemini API Key")
+    st.sidebar.subheader(" Gemini API Key")
     user_api_key = st.sidebar.text_input(
         "Masukkan API Key Anda:",
         value=st.session_state.get("custom_api_key", ""),
@@ -16,7 +16,7 @@ def render_sidebar():
         st.session_state["custom_api_key"] = user_api_key
         st.sidebar.success("API Key aktif!", icon="✅")
     else:
-        st.sidebar.warning("⚠️ Masukkan API Key untuk menggunakan AI.", icon="⚠️")
+        st.sidebar.warning(" Masukkan API Key untuk menggunakan AI.", icon="⚠️")
         
     st.sidebar.divider()
     
