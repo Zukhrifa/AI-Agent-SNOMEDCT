@@ -1,11 +1,10 @@
 import streamlit as st
-import google.generativeai as genai
 
 def render_sidebar():
-    st.sidebar.title("Pengaturan & Pasien")
+    st.sidebar.title("⚙️ Pengaturan & Pasien")
     
-    # --- FITUR INPUT & VALIDASI API KEY REAL ---
-    st.sidebar.subheader(" Gemini API Key")
+    # --- FITUR INPUT API KEY MANUAL ---
+    st.sidebar.subheader("🔑 Gemini API Key")
     user_api_key = st.sidebar.text_input(
         "Masukkan API Key Anda:",
         value=st.session_state.get("custom_api_key", ""),
@@ -14,24 +13,10 @@ def render_sidebar():
     )
     
     if user_api_key:
-        try:
-            # Konfigurasi dan lakukan test panggil model secara nyata (real request)
-            genai.configure(api_key=user_api_key)
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            
-            # Melakukan tes generate singkat untuk memastikan kunci benar-benar valid
-            response = model.generate_content("test")
-            
-            if response:
-                st.session_state["custom_api_key"] = user_api_key
-                st.sidebar.success("API Key aktif dan valid! ", icon="✅")
-        except Exception as e:
-            # Jika kunci ngawur/salah, blok try akan gagal dan masuk ke sini
-            st.sidebar.error("API Key salah atau tidak valid! ", icon="❌")
-            if "custom_api_key" in st.session_state:
-                del st.session_state["custom_api_key"]
+        st.session_state["custom_api_key"] = user_api_key
+        st.sidebar.success("API Key disimpan!", icon="✅")
     else:
-        st.sidebar.warning("Masukkan API Key untuk menggunakan AI.", icon="⚠️")
+        st.sidebar.warning("⚠️ Masukkan API Key untuk menggunakan AI.", icon="⚠️")
         
     st.sidebar.divider()
     
