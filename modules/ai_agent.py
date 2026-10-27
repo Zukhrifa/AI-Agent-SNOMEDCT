@@ -63,8 +63,8 @@ Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasann
 KODE SNOMED CT:
 - Daftar referensi di bawah hanyalah KANDIDAT istilah, bukan fakta tentang pasien.
 - Pilih HANYA concept_id yang persis ada di daftar. Dilarang mengarang kode.
-- Boleh beberapa kode. Kategori: "gejala", "faktor_risiko", "diagnosis". Hanya sertakan yang didukung jawaban pasien.
-- Status "ask": codes harus []. Status "final": isi codes; jika tidak ada yang cocok, biarkan [].
+- Boleh beberapa kode. Kategori: "gejala", "faktor_risiko", "diagnosis". Hanya sertakan yang didukung jawaban pasien dan paling mendekati.
+- Status "ask": codes harus []. Status "final": isi codes; jika tidak ada yang cocok, beri kode paling mendekati [].
 
 Referensi SNOMED CT (concept_id | istilah):
 {{REFERENSI}}

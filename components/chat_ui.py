@@ -99,7 +99,7 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
         extra += (
             "<div style='margin-top:10px;font-size:12px;color:#92400e;background:#fffbeb;"
             "border:1px solid #fde68a;border-radius:8px;padding:6px 10px;'>"
-            "⚠️ Ini dukungan keputusan klinis, bukan diagnosis pasti. Keputusan akhir ada pada dokter.</div>"
+            "Ini dukungan keputusan klinis, bukan diagnosis pasti. Keputusan akhir ada pada dokter. Apakah jawaban akurat?</div>"
         )
 
     # Satu baris, tanpa indentasi dan tanpa baris kosong
