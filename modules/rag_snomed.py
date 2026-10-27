@@ -1,4 +1,5 @@
 import os
+import re
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -10,6 +11,11 @@ load_dotenv()
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
 LEGACY_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 MARKER_FILE = os.path.join(CHROMA_PATH, "embedding_model.txt")
+
+# Term yang hanya berisi angka / notasi ilmiah (mis. "9E+17") adalah sisa kerusakan CSV
+NUMERIC_TERM_RE = re.compile(r"[\d.]+(?:e[+-]?\d+)?", re.IGNORECASE)
+# ID berawalan 90000000... adalah konsep metadata SNOMED (modul, tipe, dst.), bukan konsep klinis
+METADATA_ID_PREFIX = "90000000"
 
 
 def resolve_embedding_model() -> str:
@@ -40,20 +46,69 @@ def warmup() -> bool:
     return True
 
 
-def _format_doc(doc) -> str:
-    meta = doc.metadata or {}
-    term = meta.get("term")
-    concept_id = meta.get("conceptId")
-    if term and concept_id:
-        return f"- {term} (SNOMED CT ID: {concept_id})"
-    return f"- {doc.page_content}"  # format database lama
+def _legacy_term(content: str) -> str:
+    """Database lama menyimpan 'Terminologi Medis: X, Concept ID: Y' sebagai isi dokumen."""
+    term = re.sub(r"^Terminologi Medis:\s*", "", content or "")
+    term = re.sub(r",\s*Concept ID:.*$", "", term)
+    return term.strip()
 
 
-@st.cache_data(show_spinner=False, max_entries=512)
-def get_snomed_context(query: str, k: int = 3) -> str:
-    """Cari istilah SNOMED CT terdekat. Hasil di-cache untuk query yang sama."""
+def is_junk(concept_id: str, term: str) -> bool:
+    """True untuk entri rusak/metadata yang tidak boleh dipakai sebagai kode klinis."""
+    term = (term or "").strip()
+    concept_id = (concept_id or "").strip()
+    if not term or not concept_id:
+        return True
+    if NUMERIC_TERM_RE.fullmatch(term):
+        return True
+    if concept_id.startswith(METADATA_ID_PREFIX):
+        return True
+    return False
+
+
+@st.cache_data(show_spinner=False, max_entries=1024)
+def search_candidates(query: str, k: int = 3) -> list:
+    """Cari konsep SNOMED CT terdekat. Return: [{'conceptId': ..., 'term': ...}]"""
     query = " ".join(query.split())[:300]
     if not query:
+        return []
+
+    # Ambil lebih banyak lalu saring, supaya entri sampah tidak menghabiskan jatah k
+    docs = get_cached_vectorstore().similarity_search(query, k=k * 4)
+
+    results, seen = [], set()
+    for d in docs:
+        meta = d.metadata or {}
+        concept_id = str(meta.get("conceptId", "")).strip()
+        term = meta.get("term") or _legacy_term(d.page_content)
+
+        if is_junk(concept_id, term) or concept_id in seen:
+            continue
+        seen.add(concept_id)
+        results.append({"conceptId": concept_id, "term": term})
+        if len(results) >= k:
+            break
+    return results
+
+
+@st.cache_data(show_spinner=False, max_entries=2048)
+def lookup_term(concept_id: str) -> str:
+    """Validasi kode: kembalikan istilah jika conceptId benar-benar ada di database
+    DAN bukan entri sampah/metadata. Jika tidak, kembalikan ''."""
+    cid = re.sub(r"\D", "", str(concept_id))
+    if not cid:
         return ""
-    docs = get_cached_vectorstore().similarity_search(query, k=k)
-    return "\n".join(_format_doc(d) for d in docs)
+
+    res = get_cached_vectorstore()._collection.get(
+        where={"conceptId": cid},
+        limit=1,
+        include=["metadatas", "documents"],
+    )
+    metas = res.get("metadatas") or []
+    docs = res.get("documents") or []
+    if not metas and not docs:
+        return ""
+
+    meta = metas[0] if metas else {}
+    term = meta.get("term") or _legacy_term(docs[0] if docs else "")
+    return "" if is_junk(cid, term) else term
