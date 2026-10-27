@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from modules.rag_snomed import search_candidates
+from modules.rag_snomed import search_candidates, search_terms
 
 load_dotenv()
 
@@ -38,6 +38,12 @@ FINAL_REQUEST_TEXT = (
     f"{CONTROL_PREFIX} mohon berikan kesimpulan dugaan diagnosis beserta kode SNOMED CT "
     "berdasarkan informasi yang sudah terkumpul."
 )
+REGENERATE_REQUEST_TEXT = (
+    f"{CONTROL_PREFIX} kesimpulan sebelumnya dinilai TIDAK akurat oleh dokter. "
+    "Mohon buat ulang kesimpulan yang lebih sesuai dan akurat berdasarkan seluruh data yang ada "
+    "(jawaban pasien, data pasien tersimpan, tanda vital, pemeriksaan fisik, dan data penunjang). "
+    "Pertimbangkan diagnosis alternatif serta koreksi temuan dan kodenya. Jangan mengulang kesimpulan yang sama."
+)
 VALID_CATEGORIES = ("gejala", "faktor_risiko", "diagnosis")
 
 DEFAULT_QUICK_ACTIONS = [
@@ -65,6 +71,7 @@ Dugaan diagnosis (urut dari paling mungkin, maksimal 3): ...
 Dasar: ...
 Tanda bahaya / saran pemeriksaan lanjutan: ...
 Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
+C. Jika dokter menyatakan kesimpulan sebelumnya TIDAK akurat: buat kesimpulan BARU (status "final") yang berbeda dan lebih sesuai. Tinjau ulang semua data, pertimbangkan diagnosis alternatif, perbaiki findings. Jangan mengulang kesimpulan yang sama.
 
 TEMUAN UNTUK KODE SNOMED CT:
 - Anda TIDAK menulis kode angka. Sebutkan konsep klinisnya di "findings"; sistem akan mencari kode SNOMED CT terdekat dari database.
@@ -81,6 +88,14 @@ FORMAT OUTPUT (wajib persis, tanpa teks lain):
 {"status": "ask atau final", "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
 Pada status "final", "quick_actions" harus [].
 Baris pemisah harus persis "{{DELIM}}" (tiga tanda sama dengan di kiri DAN kanan) pada baris tersendiri, tidak boleh dihilangkan atau diubah."""
+
+TRANSLATE_PROMPT = """Anda penerjemah istilah medis untuk pencarian SNOMED CT.
+Ubah masukan (bahasa Indonesia atau bahasa awam lain) menjadi 1 sampai 3 istilah medis berbahasa Inggris yang baku dan sependek mungkin, bergaya SNOMED CT.
+Balas HANYA berupa array JSON berisi string, tanpa teks lain.
+Contoh:
+"nyeri dada seperti ditindih" -> ["chest pain", "crushing chest pain"]
+"sesak napas" -> ["dyspnea", "shortness of breath"]
+"tekanan darah tinggi" -> ["hypertension"]"""
 
 
 def get_api_key() -> str:
@@ -341,25 +356,27 @@ def _ratio(a: str, b: str) -> float:
 
 
 def match_label(query: str, term: str) -> str:
-    """tepat / mirip / terdekat, berdasarkan kemiripan teks istilah."""
+    """tepat / mirip / terdekat / lemah, berdasarkan kemiripan teks istilah."""
     r = _ratio(query, term)
     q_words, t_words = set(_norm(query).split()), set(_norm(term).split())
     if r >= 0.9:
         return "tepat"
     if r >= 0.6 or (q_words and q_words <= t_words):
         return "mirip"
-    return "terdekat"
+    if r >= 0.4:
+        return "terdekat"
+    return "lemah"
 
 
 def find_best_concept(term_en: str, label: str):
     """Cari konsep SNOMED terdekat untuk satu temuan. Return (konsep, label_kecocokan) atau None."""
     pool, seen = [], set()
-    for query, k in ((term_en, 5), (label, 3)):
+    for query, k in ((term_en, 6), (label, 4)):
         query = (query or "").strip()
         if not query:
             continue
         try:
-            hits = search_candidates(query, k)
+            hits = search_terms(query, k)
         except Exception as e:
             print(f"[rag] pencarian '{query}' gagal: {e}")
             hits = []
@@ -373,7 +390,7 @@ def find_best_concept(term_en: str, label: str):
 
     ref = term_en or label
     best = max(pool, key=lambda h: _ratio(ref, h["term"]))
-    # Jika tidak ada yang cukup mirip secara teks, percayakan urutan kemiripan vektor
+    # Jika tidak ada yang cukup mirip secara teks, percayakan urutan hasil pencarian
     if _ratio(ref, best["term"]) < 0.5:
         best = pool[0]
     return best, match_label(ref, best["term"])
@@ -509,3 +526,39 @@ def friendly_error(e: Exception) -> str:
     if hints:
         return " ".join(hints) + " Coba kirim ulang pesan Anda."
     return f"Terjadi kesalahan saat memanggil LLM: {msg}"
+
+
+# ---------------------------------------------------------------------------
+# Terjemahan istilah (Indonesia -> istilah Inggris gaya SNOMED) untuk pencarian
+# ---------------------------------------------------------------------------
+_TRANSLATE_CACHE = {}
+
+
+def translate_to_snomed_terms(query: str):
+    """Return (daftar_istilah_inggris, pesan_error). Hasil sukses di-cache agar hemat kuota API."""
+    key = " ".join((query or "").lower().split())
+    if not key:
+        return [], ""
+    if key in _TRANSLATE_CACHE:
+        return list(_TRANSLATE_CACHE[key]), ""
+
+    messages = [SystemMessage(content=TRANSLATE_PROMPT), HumanMessage(content=query.strip())]
+    try:
+        raw = "".join(_stream_llm(messages))
+    except Exception as e:
+        return [], friendly_error(e)[:200]
+
+    terms = []
+    try:
+        cleaned = re.sub(r"```json|```", "", raw).strip()
+        match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+        parsed = json.loads(match.group(0)) if match else []
+        terms = [str(t).strip() for t in parsed if str(t).strip()][:3]
+    except Exception:
+        terms = []
+
+    if not terms:
+        return [], "AI tidak mengembalikan istilah yang bisa dibaca"
+
+    _TRANSLATE_CACHE[key] = terms
+    return list(terms), ""

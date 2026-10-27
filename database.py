@@ -2,20 +2,33 @@ import json
 import os
 import sqlite3
 from contextlib import closing
+from datetime import date
 
 DB_FILE = "anamnesis_local.db"
 
 # Kolom JSON pada tabel patients dan tipe datanya
-JSON_FIELDS = {"chief_complaints": list, "anamnesis": dict, "physical_exam": dict}
+JSON_FIELDS = {
+    "chief_complaints": list,
+    "anamnesis": dict,
+    "physical_exam": dict,
+    "confirmed_findings": list,
+}
 PLAIN_FIELDS = ("name", "birth_date", "sex")
 _PATIENT_COLS = (
-    "mrn", "name", "birth_date", "sex", "chief_complaints",
-    "anamnesis", "physical_exam", "created_at", "updated_at",
+    "mrn", "name", "birth_date", "sex", "chief_complaints", "anamnesis",
+    "physical_exam", "confirmed_findings", "created_at", "updated_at",
 )
 
 
 def _connect():
     return sqlite3.connect(DB_FILE)
+
+
+def _ensure_column(conn, table: str, column: str, ddl: str):
+    """Tambah kolom jika belum ada (migrasi database lama)."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def init_db():
@@ -40,6 +53,7 @@ def init_db():
                     chief_complaints TEXT,
                     anamnesis TEXT,
                     physical_exam TEXT,
+                    confirmed_findings TEXT,
                     created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
                     updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
                 )
@@ -60,13 +74,19 @@ def init_db():
                     mrn TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     codes TEXT,
+                    approved INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
                 )
             ''')
+
+            # Migrasi database lama
+            _ensure_column(conn, "patients", "confirmed_findings", "TEXT")
+            _ensure_column(conn, "anamnesis_results", "approved", "INTEGER DEFAULT 0")
+
             conn.execute("CREATE INDEX IF NOT EXISTS idx_supporting_mrn ON patient_supporting(mrn)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_results_mrn ON anamnesis_results(mrn)")
 
-            # Migrasi: masukkan pasien dari roomchat lama ke tabel patients
+            # Pasien dari roomchat lama dimasukkan ke tabel patients
             conn.execute('''
                 INSERT OR IGNORE INTO patients (mrn, name)
                 SELECT medical_record_no, patient_name FROM consultations
@@ -198,7 +218,7 @@ def list_patients() -> list:
 
 def update_patient(mrn: str, **fields):
     """Perbarui sebagian kolom pasien. Kolom yang diizinkan: name, birth_date, sex,
-    chief_complaints (list), anamnesis (dict), physical_exam (dict)."""
+    chief_complaints, anamnesis, physical_exam, confirmed_findings."""
     allowed = set(PLAIN_FIELDS) | set(JSON_FIELDS)
     sets, values = [], []
     for key, value in fields.items():
@@ -260,12 +280,12 @@ def delete_supporting(item_id: int):
 # ---------------------------------------------------------------------------
 # Hasil anamnesis AI
 # ---------------------------------------------------------------------------
-def save_anamnesis_result(mrn: str, summary: str, codes: list):
+def save_anamnesis_result(mrn: str, summary: str, codes: list, approved: bool = False):
     with closing(_connect()) as conn:
         with conn:
             conn.execute(
-                "INSERT INTO anamnesis_results (mrn, summary, codes) VALUES (?, ?, ?)",
-                (mrn, summary, json.dumps(codes or [], ensure_ascii=False)),
+                "INSERT INTO anamnesis_results (mrn, summary, codes, approved) VALUES (?, ?, ?, ?)",
+                (mrn, summary, json.dumps(codes or [], ensure_ascii=False), 1 if approved else 0),
             )
 
 
@@ -273,7 +293,7 @@ def list_anamnesis_results(mrn: str, limit: int = 20) -> list:
     with closing(_connect()) as conn:
         rows = conn.execute(
             '''
-            SELECT id, summary, codes, created_at
+            SELECT id, summary, codes, created_at, approved
             FROM anamnesis_results WHERE mrn = ? ORDER BY id DESC LIMIT ?
             ''',
             (mrn, limit),
@@ -285,8 +305,54 @@ def list_anamnesis_results(mrn: str, limit: int = 20) -> list:
             codes = json.loads(r[2]) if r[2] else []
         except Exception:
             codes = []
-        results.append({"id": r[0], "summary": r[1], "codes": codes, "created_at": r[3]})
+        results.append({
+            "id": r[0], "summary": r[1], "codes": codes,
+            "created_at": r[3], "approved": bool(r[4]),
+        })
     return results
+
+
+def approve_anamnesis(mrn: str, summary: str, codes: list) -> dict:
+    """Dipanggil saat dokter menyatakan hasil AI akurat.
+    - Menyimpan kesimpulan (berstatus disetujui) ke anamnesis_results.
+    - Gejala ditambahkan ke keluhan utama pasien (tanpa duplikat).
+    - Semua temuan ditambahkan/diperbarui di 'temuan terkonfirmasi'.
+    Kode berkecocokan 'lemah' tidak disimpan ke data pasien."""
+    codes = codes or []
+    usable = [c for c in codes if c.get("match") != "lemah"]
+
+    save_anamnesis_result(mrn, summary, codes, approved=True)
+
+    patient = get_patient(mrn)
+    if patient is None:
+        return {"saved": 0, "complaints": 0, "skipped": len(codes)}
+
+    complaints = list(patient["chief_complaints"])
+    complaint_ids = {c.get("conceptId") for c in complaints}
+    added = 0
+    for c in usable:
+        if c.get("kategori") == "gejala" and c["conceptId"] not in complaint_ids:
+            complaints.append({"conceptId": c["conceptId"], "term": c["term"]})
+            complaint_ids.add(c["conceptId"])
+            added += 1
+
+    findings = {f.get("conceptId"): f for f in patient["confirmed_findings"]}
+    today = date.today().isoformat()
+    for c in usable:
+        findings[c["conceptId"]] = {
+            "conceptId": c["conceptId"],
+            "term": c["term"],
+            "kategori": c.get("kategori", "lainnya"),
+            "label": c.get("label", c["term"]),
+            "confirmed_at": today,
+        }
+
+    update_patient(
+        mrn,
+        chief_complaints=complaints,
+        confirmed_findings=list(findings.values()),
+    )
+    return {"saved": len(usable), "complaints": added, "skipped": len(codes) - len(usable)}
 
 
 init_db()

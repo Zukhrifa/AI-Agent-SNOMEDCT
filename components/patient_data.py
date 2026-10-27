@@ -15,8 +15,9 @@ from database import (
     update_patient,
     update_patient_name,
 )
+from modules.ai_agent import translate_to_snomed_terms
 from modules.patient_context import calc_age
-from modules.rag_snomed import search_candidates
+from modules.rag_snomed import index_stats, lexical_search, search_terms
 
 SEX_OPTIONS = ["", "Laki-laki", "Perempuan"]
 SUPPORT_CATEGORIES = ["Laboratorium", "EKG", "Ekokardiografi", "Rontgen Thorax", "Lainnya"]
@@ -24,23 +25,42 @@ CATEGORY_NAMES = {
     "gejala": "Gejala", "faktor_risiko": "Faktor risiko",
     "diagnosis": "Dugaan diagnosis", "lainnya": "Lainnya",
 }
+MAX_SEARCH_RESULTS = 12
 
 
 def _refresh_consultations():
     st.session_state.patient_list = get_all_consultations()
 
 
+def _date_input(label: str, value: date, key: str):
+    """Kalender pop-up; memakai format DD/MM/YYYY bila versi Streamlit mendukung."""
+    kwargs = dict(
+        value=value,
+        min_value=date(1900, 1, 1),
+        max_value=date.today(),
+        key=key,
+    )
+    try:
+        return st.date_input(label, format="DD/MM/YYYY", **kwargs)
+    except TypeError:
+        return st.date_input(label, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Tab-tab
 # ---------------------------------------------------------------------------
 def _tab_identity(mrn: str, patient: dict):
+    try:
+        saved_dob = datetime.strptime(patient.get("birth_date") or "", "%Y-%m-%d").date()
+    except ValueError:
+        saved_dob = None
+
     with st.form(f"form_identity_{mrn}"):
         name = st.text_input("Nama Pasien", value=patient["name"])
-        dob = st.text_input(
-            "Tanggal lahir (YYYY-MM-DD)",
-            value=patient.get("birth_date") or "",
-            placeholder="contoh: 1975-08-17",
-        )
+
+        dob_value = _date_input("Tanggal lahir", saved_dob or date(1980, 1, 1), key=f"dob_{mrn}")
+        dob_unknown = st.checkbox("Tanggal lahir belum diketahui", value=saved_dob is None, key=f"dob_unknown_{mrn}")
+
         sex_value = patient.get("sex") or ""
         sex = st.selectbox(
             "Jenis kelamin", SEX_OPTIONS,
@@ -49,32 +69,54 @@ def _tab_identity(mrn: str, patient: dict):
         submitted = st.form_submit_button("💾 Simpan Identitas")
 
     if submitted:
-        dob = dob.strip()
-        valid = True
-        if dob:
-            try:
-                datetime.strptime(dob, "%Y-%m-%d")
-            except ValueError:
-                valid = False
-                st.error("Format tanggal lahir harus YYYY-MM-DD.")
         if not name.strip():
-            valid = False
             st.error("Nama tidak boleh kosong.")
+            return
 
-        if valid:
-            update_patient_name(mrn, name.strip())
-            update_patient(mrn, birth_date=dob, sex=sex)
-            active = st.session_state.get("active_patient")
-            if active and active.get("mrn") == mrn:
-                active["name"] = name.strip()
-            _refresh_consultations()
-            st.success("Identitas tersimpan.")
+        dob = "" if dob_unknown else dob_value.isoformat()
+        update_patient_name(mrn, name.strip())
+        update_patient(mrn, birth_date=dob, sex=sex)
+
+        active = st.session_state.get("active_patient")
+        if active and active.get("mrn") == mrn:
+            active["name"] = name.strip()
+        _refresh_consultations()
+        st.success("Identitas tersimpan.")
+
+
+def _collect_search_results(query: str, use_ai: bool):
+    """Gabungkan hasil pencarian langsung dan hasil dari terjemahan AI. Return (hasil, catatan)."""
+    notes = []
+    variants = []
+
+    # Jika query sudah punya banyak kecocokan kata (istilah Inggris), AI tidak perlu dipanggil
+    looks_english = False
+    try:
+        looks_english = len(lexical_search(query, 5)) >= 3
+    except Exception:
+        pass
+
+    if use_ai and not looks_english:
+        with st.spinner("AI menerjemahkan ke istilah SNOMED CT..."):
+            variants, error = translate_to_snomed_terms(query)
+        if variants:
+            notes.append("Istilah Inggris dari AI: " + ", ".join(variants))
+        elif error:
+            notes.append(f"⚠️ Terjemahan AI tidak tersedia ({error}). Memakai pencarian langsung.")
+
+    results, seen = [], set()
+    for term_query in variants + [query]:
+        for hit in search_terms(term_query, 6):
+            if hit["conceptId"] not in seen:
+                seen.add(hit["conceptId"])
+                results.append(hit)
+    return results[:MAX_SEARCH_RESULTS], notes
 
 
 def _tab_chief_complaint(mrn: str, patient: dict):
     st.caption(
         "Keluhan utama dipilih dari istilah SNOMED CT agar terstandar. "
-        "Cari istilahnya, lalu pilih dari hasil pencarian."
+        "Ketik dalam bahasa Indonesia atau Inggris, lalu pilih dari hasil pencarian."
     )
     current = list(patient.get("chief_complaints") or [])
 
@@ -89,29 +131,46 @@ def _tab_chief_complaint(mrn: str, patient: dict):
     else:
         st.info("Belum ada keluhan utama.")
 
-    query = st.text_input(
-        "Cari istilah SNOMED CT",
-        key=f"kc_query_{mrn}",
-        placeholder="mis. nyeri dada / chest pain / sesak napas",
+    use_ai = st.checkbox(
+        "🌐 Terjemahkan dengan AI (Indonesia → istilah SNOMED Inggris)",
+        value=True, key=f"kc_ai_{mrn}",
     )
-    if query.strip():
-        try:
-            results = search_candidates(query.strip(), 8)
-        except Exception as e:
-            results = []
-            st.error(f"Pencarian gagal: {e}")
+    query = st.text_input(
+        "Cari keluhan / istilah",
+        key=f"kc_query_{mrn}",
+        placeholder="mis. nyeri dada seperti ditindih / chest pain",
+    ).strip()
+    if not query:
+        return
 
-        if results:
-            options = {f"{r['term']}  ({r['conceptId']})": r for r in results}
-            pick = st.selectbox("Hasil pencarian", list(options), key=f"kc_pick_{mrn}")
-            if st.button("➕ Tambahkan sebagai keluhan utama", key=f"kc_add_{mrn}"):
-                chosen = options[pick]
-                if chosen["conceptId"] not in {c["conceptId"] for c in current}:
-                    current.append({"conceptId": chosen["conceptId"], "term": chosen["term"]})
-                    update_patient(mrn, chief_complaints=current)
-                st.rerun()
-        else:
-            st.warning("Tidak ada hasil. Coba kata kunci lain (istilah Inggris biasanya lebih tepat).")
+    try:
+        results, notes = _collect_search_results(query, use_ai)
+    except Exception as e:
+        st.error(f"Pencarian gagal: {e}")
+        return
+
+    for note in notes:
+        st.caption(note)
+
+    if results:
+        options = {f"{r['term']}  ({r['conceptId']})": r for r in results}
+        pick = st.selectbox("Hasil pencarian SNOMED CT", list(options), key=f"kc_pick_{mrn}")
+        if st.button("➕ Tambahkan sebagai keluhan utama", key=f"kc_add_{mrn}"):
+            chosen = options[pick]
+            if chosen["conceptId"] not in {c["conceptId"] for c in current}:
+                current.append({"conceptId": chosen["conceptId"], "term": chosen["term"]})
+                update_patient(mrn, chief_complaints=current)
+            st.rerun()
+    else:
+        st.warning("Tidak ada hasil. Coba kata kunci lain.")
+        try:
+            stats = index_stats()
+            st.caption(
+                f"Diagnostik: {stats['terms']} istilah terindeks dari {stats['documents']} dokumen • "
+                f"model {stats['model']} • {stats['path']}"
+            )
+        except Exception as e:
+            st.caption(f"Diagnostik: database SNOMED tidak terbaca ({e})")
 
 
 def _tab_anamnesis(mrn: str, patient: dict):
@@ -190,7 +249,7 @@ def _tab_supporting(mrn: str):
     with st.form(f"form_support_{mrn}", clear_on_submit=True):
         c1, c2 = st.columns(2)
         category = c1.selectbox("Jenis pemeriksaan", SUPPORT_CATEGORIES)
-        recorded_on = c2.text_input("Tanggal pemeriksaan (YYYY-MM-DD)", value=date.today().isoformat())
+        recorded = c2.date_input("Tanggal pemeriksaan", value=date.today(), max_value=date.today())
         content = st.text_area(
             "Hasil / interpretasi", height=110,
             placeholder="Contoh EKG: sinus rhythm, ST elevasi V1-V4 ...",
@@ -201,7 +260,7 @@ def _tab_supporting(mrn: str):
         if not content.strip():
             st.warning("Isi hasil pemeriksaan terlebih dahulu.")
         else:
-            add_supporting(mrn, category, content.strip(), recorded_on.strip() or None)
+            add_supporting(mrn, category, content.strip(), recorded.isoformat())
             st.rerun()
 
     items = list_supporting(mrn)
@@ -216,15 +275,32 @@ def _tab_supporting(mrn: str):
                 st.rerun()
 
 
-def _tab_results(mrn: str):
-    st.caption("Kesimpulan AI tersimpan otomatis setiap kali anamnesis mencapai tahap akhir.")
+def _tab_results(mrn: str, patient: dict):
+    st.markdown("#### Temuan SNOMED CT terkonfirmasi")
+    st.caption("Terisi otomatis saat dokter menekan **Ya** pada pertanyaan \"Apakah jawaban AI akurat?\" di roomchat.")
+
+    findings = list(patient.get("confirmed_findings") or [])
+    if findings:
+        for i, item in enumerate(findings):
+            col_text, col_del = st.columns([11, 1])
+            kategori = CATEGORY_NAMES.get(item.get("kategori", ""), "")
+            col_text.markdown(f"• {kategori}: **{item['term']}** `{item['conceptId']}`")
+            if col_del.button("🗑", key=f"cf_del_{mrn}_{i}", help="Hapus temuan"):
+                findings.pop(i)
+                update_patient(mrn, confirmed_findings=findings)
+                st.rerun()
+    else:
+        st.info("Belum ada temuan terkonfirmasi.")
+
+    st.markdown("#### Riwayat kesimpulan anamnesis")
     results = list_anamnesis_results(mrn)
     if not results:
         st.info("Belum ada kesimpulan anamnesis untuk pasien ini.")
         return
 
     for r in results:
-        with st.expander(f"Kesimpulan — {r['created_at']}"):
+        badge = "✅ Disetujui" if r.get("approved") else "belum diverifikasi"
+        with st.expander(f"Kesimpulan — {r['created_at']} • {badge}"):
             st.write(r["summary"])
             if r["codes"]:
                 st.markdown("**Kode SNOMED CT**")
@@ -315,4 +391,4 @@ def render_patient_data_page():
     with tabs[4]:
         _tab_supporting(mrn)
     with tabs[5]:
-        _tab_results(mrn)
+        _tab_results(mrn, patient)

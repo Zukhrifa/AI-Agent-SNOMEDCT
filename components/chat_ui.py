@@ -3,12 +3,14 @@ import re
 
 import streamlit as st
 
+from components.nav import go_to_patient_data
 from components.voice_input import render_voice_button
-from database import get_all_consultations, save_anamnesis_result, save_or_update_consultation
+from database import approve_anamnesis, get_all_consultations, save_or_update_consultation
 from modules.ai_agent import (
     CONTROL_PREFIX,
     DEFAULT_QUICK_ACTIONS,
     FINAL_REQUEST_TEXT,
+    REGENERATE_REQUEST_TEXT,
     friendly_error,
     get_candidates,
     parse_response,
@@ -29,6 +31,7 @@ MATCH_STYLES = {
     "tepat": ("#dcfce7", "#166534", "tepat"),
     "mirip": ("#fef9c3", "#854d0e", "mirip"),
     "terdekat": ("#ffedd5", "#9a3412", "terdekat - verifikasi"),
+    "lemah": ("#fee2e2", "#991b1b", "tidak sesuai - tidak disimpan"),
 }
 
 
@@ -99,7 +102,31 @@ def _codes_html(codes) -> str:
     return "".join(parts)
 
 
-def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False) -> str:
+def _approval_note(approved, approval) -> str:
+    if approved is True:
+        info = approval or {}
+        detail = ""
+        if info:
+            detail = (
+                f" ({info.get('saved', 0)} temuan SNOMED tersimpan; "
+                f"{info.get('complaints', 0)} ditambahkan ke keluhan utama)"
+            )
+        return (
+            "<div style='margin-top:10px;font-size:12px;color:#166534;background:#f0fdf4;"
+            "border:1px solid #bbf7d0;border-radius:8px;padding:6px 10px;'>"
+            f"✅ Disetujui dokter dan tersimpan di Data Pasien{detail}.</div>"
+        )
+    if approved is False:
+        return (
+            "<div style='margin-top:10px;font-size:12px;color:#475569;background:#f1f5f9;"
+            "border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;'>"
+            "Ditandai tidak akurat oleh dokter. Kesimpulan baru dibuat setelah ini.</div>"
+        )
+    return ""
+
+
+def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False,
+               approved=None, approval=None) -> str:
     color = "#94a3b8" if loading else "#334155"
     italic = "font-style:italic;" if loading else ""
     title = "Kesimpulan Anamnesis" if final else "Assessment"
@@ -115,6 +142,7 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
             "⚠️ Dukungan keputusan klinis, bukan diagnosis pasti. Kode dicari otomatis dari database "
             "SNOMED CT (kecocokan terdekat), verifikasi sebelum dipakai. Keputusan akhir ada pada dokter.</div>"
         )
+        extra += _approval_note(approved, approval)
 
     # Satu baris, tanpa indentasi dan tanpa baris kosong
     return "".join([
@@ -131,6 +159,17 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
         _fmt(text),
         extra,
         "</div></div></div>",
+    ])
+
+
+def _question_bubble(text: str) -> str:
+    return "".join([
+        '<div style="display:flex;align-items:flex-start;margin-bottom:8px;">',
+        '<div style="width:32px;height:32px;background-color:#eff6ff;border-radius:50%;display:flex;'
+        'align-items:center;justify-content:center;margin-right:10px;font-size:14px;flex-shrink:0;">🤖</div>',
+        '<div style="background-color:#ffffff;border:1px solid #93c5fd;border-radius:12px;padding:12px 16px;'
+        f'font-size:15px;font-weight:600;color:#0f172a;">{html.escape(text)}</div>',
+        "</div>",
     ])
 
 
@@ -170,6 +209,43 @@ def send_user_message(text: str, question: str = None):
     _persist()
 
 
+# ---------------------------------------------------------------------------
+# Persetujuan dokter: "Apakah jawaban AI akurat?"
+# ---------------------------------------------------------------------------
+def _approve_last(patient: dict):
+    """Dokter menyatakan akurat: simpan ke Data Pasien (hasil anamnesis, keluhan utama, temuan)."""
+    msg = st.session_state.messages[-1]
+    info = approve_anamnesis(patient["mrn"], msg["content"], msg.get("codes") or [])
+    msg["approved"] = True
+    msg["approval"] = info
+    st.session_state.quick_actions = []
+    _persist()
+
+
+def _reject_last():
+    """Dokter menyatakan tidak akurat: tandai, lalu minta AI membuat kesimpulan baru."""
+    msg = st.session_state.messages[-1]
+    msg["approved"] = False
+    send_user_message(REGENERATE_REQUEST_TEXT)
+
+
+def _render_feedback(patient: dict):
+    st.markdown(_question_bubble("Apakah jawaban AI akurat?"), unsafe_allow_html=True)
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button("✅ Ya, akurat", key="fb_yes", use_container_width=True, type="primary"):
+            _approve_last(patient)
+            st.rerun()
+    with col_no:
+        if st.button("❌ Tidak, buat ulang", key="fb_no", use_container_width=True):
+            _reject_last()
+            st.rerun()
+    st.caption(
+        "Ya: hasil disimpan ke Data Pasien. Tidak: AI membuat kesimpulan baru dari semua data yang ada. "
+        "Anda juga bisa mengetik koreksi di kotak pesan."
+    )
+
+
 def _process_pending(slot):
     pending = st.session_state.get("pending_input")
     if not pending:
@@ -204,13 +280,10 @@ def _process_pending(slot):
 
         msg = {"role": "assistant", "content": text}
         if result["status"] == "final":
+            # Belum disimpan ke Data Pasien: menunggu persetujuan dokter
             msg["final"] = True
             msg["codes"] = result["codes"]
-            # Simpan hasil ke tabel anamnesis_results agar bisa dipanggil lagi
-            try:
-                save_anamnesis_result(patient["mrn"], text, result["codes"])
-            except Exception as e:
-                print(f"[db] gagal menyimpan hasil anamnesis: {e}")
+            msg["approved"] = None
 
         st.session_state.messages.append(msg)
         st.session_state.quick_actions = result["quick_actions"]
@@ -241,7 +314,9 @@ def render_chat_room():
     active_q = st.session_state.get("active_question")
 
     messages = st.session_state.messages
-    last_final = bool(messages) and messages[-1].get("role") == "assistant" and messages[-1].get("final", False)
+    last_msg = messages[-1] if messages else {}
+    last_final = last_msg.get("role") == "assistant" and bool(last_msg.get("final", False))
+    last_approved = last_msg.get("approved") if last_final else None
     has_user_msg = any(m["role"] == "user" for m in messages)
 
     # Header Pasien
@@ -265,6 +340,8 @@ def render_chat_room():
                     strip_data_block(msg["content"]),  # membersihkan pesan lama yang bocor
                     codes=msg.get("codes"),
                     final=msg.get("final", False),
+                    approved=msg.get("approved"),
+                    approval=msg.get("approval"),
                 ),
                 unsafe_allow_html=True,
             )
@@ -277,7 +354,20 @@ def render_chat_room():
         st.error(error)
 
     if not pending:
-        if active_q:
+        if last_final and last_approved is None:
+            # Kesimpulan AI menunggu penilaian dokter
+            _render_feedback(patient)
+
+        elif last_final and last_approved is True:
+            st.caption(
+                "Anamnesis selesai dan tersimpan di Data Pasien. "
+                "Tambahkan informasi baru di kotak pesan bila ingin memperbarui kesimpulan."
+            )
+            if st.button("🗂 Lihat di Data Pasien", key="after_approve_data"):
+                go_to_patient_data(patient["mrn"])
+                st.rerun()
+
+        elif active_q:
             # Dokter sudah memilih pertanyaan -> menunggu jawaban pasien
             col_q, col_cancel = st.columns([10, 2])
             with col_q:
@@ -289,8 +379,9 @@ def render_chat_room():
                 if st.button("Batal", key="cancel_q", use_container_width=True):
                     st.session_state.active_question = None
                     st.rerun()
+
         else:
-            # Rekomendasi pertanyaan (hilang setelah kesimpulan)
+            # Rekomendasi pertanyaan
             if st.session_state.get("quick_actions"):
                 st.markdown(
                     "<div style='margin-top: 10px; margin-bottom: 6px; font-weight: 600; font-size: 13px; color: #64748b;'>Suggested Clinical Actions:</div>",
@@ -315,12 +406,6 @@ def render_chat_room():
                 if st.button("📋 Minta Kesimpulan Sekarang", key="ask_final"):
                     send_user_message(FINAL_REQUEST_TEXT)
                     st.rerun()
-
-            if last_final:
-                st.caption(
-                    "Anamnesis selesai dan tersimpan di Data Pasien. "
-                    "Tambahkan informasi baru di kotak pesan bila ingin memperbarui kesimpulan."
-                )
 
     # Kotak input utama (tombol mikrofon disisipkan ke dalamnya oleh render_voice_button)
     placeholder = "Ketik atau ucapkan jawaban pasien..." if active_q else "Ketik atau ucapkan keluhan / jawaban pasien..."
