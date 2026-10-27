@@ -55,7 +55,7 @@ ALUR:
 A. Jika informasi belum cukup -> status "ask": tanggapi jawaban terakhir (maksimal 3 kalimat), lalu beri 3 pertanyaan lanjutan BARU yang singkat tentang topik yang belum digali (karakteristik nyeri, penjalaran, durasi, pemicu/peredam, gejala penyerta, riwayat penyakit, obat, faktor risiko: merokok, hipertensi, diabetes, kolesterol, riwayat keluarga).
 B. Status "final" jika (1) minimal 4 jawaban pasien yang konkret sudah terkumpul dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan. Tulis kesimpulan ringkas dengan struktur:
 Ringkasan gejala: ...
-Dugaan diagnosis (urut dari paling mungkin): ...
+Dugaan diagnosis (urut dari paling mungkin, maksimal 3): ...
 Dasar: ...
 Tanda bahaya / saran pemeriksaan lanjutan: ...
 Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
@@ -423,19 +423,3 @@ def friendly_error(e: Exception) -> str:
     if hints:
         return " ".join(hints) + " Coba kirim ulang pesan Anda."
     return f"Terjadi kesalahan saat memanggil LLM: {msg}"
-
-from database import get_patient_profile
-
-def get_patient_context_string(mrn: str) -> str:
-    profile = get_patient_profile(mrn)
-    if not profile:
-        return ""
-    return f"""
-PROFIL & PEMERIKSAAN FISIK TERAKHIR PASIEN:
-- Jenis Kelamin: {profile.get('gender', '-')} | Umur: {profile.get('age', '-')} tahun
-- Tensi (TD): {profile.get('blood_pressure', '-')} mmHg | Nadi: {profile.get('pulse', '-')} x/menit
-- Suhu: {profile.get('temperature', '-')} °C | Respirasi: {profile.get('respirasi', '-')} x/menit
-- BB: {profile.get('weight', '-')} kg | TB: {profile.get('height', '-')} cm
-- Alergi: {profile.get('allergies', '-')} | Skala Nyeri: {profile.get('pain_scale', '-')}
-- Catatan EKG / Fisik Lain: {profile.get('ekg_notes', '-')}
-"""
