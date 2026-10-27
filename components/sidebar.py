@@ -2,12 +2,8 @@ import os
 
 import streamlit as st
 
-
-def _open_patient(pat: dict):
-    st.session_state.active_patient = pat
-    st.session_state.messages = pat.get("messages", [])
-    st.session_state.quick_actions = pat.get("quick_actions", [])
-    st.session_state.pending_input = None
+from components.nav import go_to_patient_data, open_consultation
+from database import list_patients
 
 
 def render_sidebar():
@@ -52,25 +48,46 @@ def render_sidebar():
 
     st.sidebar.divider()
 
-    # --- MANAJEMEN DAFTAR PASIEN ---
-    st.sidebar.subheader("📋 Daftar Pasien")
+    # --- DATA PASIEN (halaman data per MRN) ---
+    st.sidebar.subheader("🗂 Data Pasien")
+    patients = list_patients()
+    viewing_data = st.session_state.get("view") == "patient_data"
+    current_mrn = st.session_state.get("data_mrn")
+
+    with st.sidebar.expander("Buka data pasien", expanded=viewing_data):
+        if st.button("➕ Tambah / Kelola Data Pasien", key="sb_data_home", use_container_width=True):
+            go_to_patient_data()
+            st.rerun()
+        if not patients:
+            st.info("Belum ada data pasien.")
+        for p in patients:
+            marker = "▶ " if (viewing_data and p["mrn"] == current_mrn) else "📄 "
+            if st.button(f"{marker}{p['name']} ({p['mrn']})", key=f"sb_data_{p['mrn']}", use_container_width=True):
+                go_to_patient_data(p["mrn"])
+                st.rerun()
+
+    st.sidebar.divider()
+
+    # --- ROOMCHAT ---
+    st.sidebar.subheader("💬 Roomchat")
 
     if st.sidebar.button("➕ Pasien / Konsultasi Baru", use_container_width=True):
-        # Reset state untuk chat baru, tapi JANGAN hapus patient_list
+        # Reset state untuk chat baru, tapi JANGAN hapus data pasien / patient_list
         st.session_state.active_patient = None
         st.session_state.messages = []
         st.session_state.quick_actions = []
         st.session_state.pending_input = None
+        st.session_state.view = "chat"
         st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📋 Riwayat Daftar Pasien")
+    st.sidebar.subheader("📋 Riwayat Roomchat")
 
     if not st.session_state.patient_list:
-        st.sidebar.info("Belum ada riwayat pasien tersimpan.")
+        st.sidebar.info("Belum ada riwayat roomchat tersimpan.")
     else:
         for idx, pat in enumerate(st.session_state.patient_list):
             btn_label = f"👤 {pat['name']} ({pat.get('mrn', 'MRN')})"
             if st.sidebar.button(btn_label, key=f"history_pat_{idx}", use_container_width=True):
-                _open_patient(pat)
+                open_consultation(pat)
                 st.rerun()

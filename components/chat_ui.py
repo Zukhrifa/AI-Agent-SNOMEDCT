@@ -3,8 +3,10 @@ import re
 
 import streamlit as st
 
-from database import get_all_consultations, save_or_update_consultation
+from components.voice_input import render_voice_button
+from database import get_all_consultations, save_anamnesis_result, save_or_update_consultation
 from modules.ai_agent import (
+    CONTROL_PREFIX,
     DEFAULT_QUICK_ACTIONS,
     FINAL_REQUEST_TEXT,
     friendly_error,
@@ -14,11 +16,7 @@ from modules.ai_agent import (
     strip_data_block,
     visible_part,
 )
-
-try:
-    from streamlit_mic_recorder import speech_to_text
-except ImportError:
-    speech_to_text = None
+from modules.patient_context import build_patient_context
 
 CATEGORY_LABELS = [
     ("gejala", "Gejala / Temuan"),
@@ -26,6 +24,12 @@ CATEGORY_LABELS = [
     ("diagnosis", "Dugaan Diagnosis"),
     ("lainnya", "Lainnya"),
 ]
+
+MATCH_STYLES = {
+    "tepat": ("#dcfce7", "#166534", "tepat"),
+    "mirip": ("#fef9c3", "#854d0e", "mirip"),
+    "terdekat": ("#ffedd5", "#9a3412", "terdekat - verifikasi"),
+}
 
 
 def _fmt(text: str) -> str:
@@ -54,6 +58,16 @@ def _user_bubble(msg: dict) -> str:
     )
 
 
+def _match_badge(match: str) -> str:
+    if match not in MATCH_STYLES:
+        return ""
+    bg, fg, text = MATCH_STYLES[match]
+    return (
+        f"<span style='background:{bg};color:{fg};padding:1px 6px;border-radius:6px;"
+        f"font-size:11px;margin-left:4px;'>{text}</span>"
+    )
+
+
 def _codes_html(codes) -> str:
     if not codes:
         return (
@@ -72,16 +86,20 @@ def _codes_html(codes) -> str:
             f"<div style='font-size:12px;font-weight:600;color:#64748b;margin-top:6px;'>{label}</div>"
         )
         for c in items:
+            source = (c.get("label") or "").strip()
+            arrow = ""
+            if source and source.lower() != c["term"].lower():
+                arrow = f"<span style='color:#64748b;'>{html.escape(source)} → </span>"
             parts.append(
-                f"<div style='margin-left:8px;'>• {html.escape(c['term'])} "
+                f"<div style='margin-left:8px;'>• {arrow}{html.escape(c['term'])} "
                 "<span style='background:#eff6ff;color:#2563eb;padding:1px 6px;border-radius:6px;font-size:12px;'>"
-                f"{html.escape(c['conceptId'])}</span></div>"
+                f"{html.escape(c['conceptId'])}</span>{_match_badge(c.get('match', ''))}</div>"
             )
     parts.append("</div>")
     return "".join(parts)
 
 
-def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False, dropped: int = 0) -> str:
+def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False) -> str:
     color = "#94a3b8" if loading else "#334155"
     italic = "font-style:italic;" if loading else ""
     title = "Kesimpulan Anamnesis" if final else "Assessment"
@@ -91,15 +109,11 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
     extra = ""
     if final:
         extra += _codes_html(codes)
-        if dropped:
-            extra += (
-                "<div style='margin-top:6px;font-size:12px;color:#64748b;'>"
-                f"{dropped} kode dibuang otomatis karena tidak ditemukan di database SNOMED.</div>"
-            )
         extra += (
             "<div style='margin-top:10px;font-size:12px;color:#92400e;background:#fffbeb;"
             "border:1px solid #fde68a;border-radius:8px;padding:6px 10px;'>"
-            "Ini dukungan keputusan klinis, bukan diagnosis pasti. Keputusan akhir ada pada dokter. Apakah jawaban akurat?</div>"
+            "⚠️ Dukungan keputusan klinis, bukan diagnosis pasti. Kode dicari otomatis dari database "
+            "SNOMED CT (kecocokan terdekat), verifikasi sebelum dipakai. Keputusan akhir ada pada dokter.</div>"
         )
 
     # Satu baris, tanpa indentasi dan tanpa baris kosong
@@ -121,7 +135,7 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
 
 
 def _persist():
-    """Simpan percakapan aktif ke SQLite dan segarkan daftar pasien."""
+    """Simpan percakapan aktif ke SQLite dan segarkan daftar roomchat."""
     patient = st.session_state.get("active_patient")
     if not patient:
         return
@@ -161,13 +175,16 @@ def _process_pending(slot):
     if not pending:
         return
 
+    patient = st.session_state.active_patient
     history = st.session_state.messages[:-1]
+    patient_context = build_patient_context(patient["mrn"])
+
     slot.markdown(_ai_bubble("⏳ Menganalisis jawaban pasien...", loading=True), unsafe_allow_html=True)
 
     raw = ""
     error = None
     try:
-        for chunk in stream_anamnesis_response(pending, history):
+        for chunk in stream_anamnesis_response(pending, history, patient_context):
             raw += chunk
             visible = visible_part(raw).strip()
             if visible:
@@ -178,15 +195,22 @@ def _process_pending(slot):
     st.session_state.pending_input = None
 
     if raw.strip():
-        result = parse_response(raw, get_candidates(pending, history))
+        result = parse_response(
+            raw,
+            get_candidates(pending, history),
+            force_final=pending.startswith(CONTROL_PREFIX),
+        )
         text = result["text"] or "Maaf, respons AI kosong. Silakan kirim ulang pesan Anda."
 
         msg = {"role": "assistant", "content": text}
         if result["status"] == "final":
             msg["final"] = True
             msg["codes"] = result["codes"]
-            if result["dropped"]:
-                msg["dropped_codes"] = result["dropped"]
+            # Simpan hasil ke tabel anamnesis_results agar bisa dipanggil lagi
+            try:
+                save_anamnesis_result(patient["mrn"], text, result["codes"])
+            except Exception as e:
+                print(f"[db] gagal menyimpan hasil anamnesis: {e}")
 
         st.session_state.messages.append(msg)
         st.session_state.quick_actions = result["quick_actions"]
@@ -203,6 +227,10 @@ def render_chat_room():
 
     if "messages" not in st.session_state:
         st.session_state.messages = patient.get("messages", [])
+
+    # Tombol mikrofon di dalam kotak pesan (di samping tombol kirim).
+    # Dipanggil paling awal agar posisinya di halaman stabil antar-rerun.
+    render_voice_button()
 
     pending = st.session_state.get("pending_input")
 
@@ -237,7 +265,6 @@ def render_chat_room():
                     strip_data_block(msg["content"]),  # membersihkan pesan lama yang bocor
                     codes=msg.get("codes"),
                     final=msg.get("final", False),
-                    dropped=msg.get("dropped_codes", 0),
                 ),
                 unsafe_allow_html=True,
             )
@@ -256,7 +283,7 @@ def render_chat_room():
             with col_q:
                 st.info(
                     f"❓ **Tanyakan ke pasien:** {active_q}\n\n"
-                    "Ketik atau ucapkan **jawaban pasien** di kotak pesan di bawah."
+                    "Ketik atau ucapkan **jawaban pasien** di kotak pesan di bawah (ikon 🎙 di samping tombol kirim)."
                 )
             with col_cancel:
                 if st.button("Batal", key="cancel_q", use_container_width=True):
@@ -291,25 +318,12 @@ def render_chat_room():
 
             if last_final:
                 st.caption(
-                    "Anamnesis selesai. Tambahkan informasi baru di kotak pesan bila ingin memperbarui kesimpulan."
+                    "Anamnesis selesai dan tersimpan di Data Pasien. "
+                    "Tambahkan informasi baru di kotak pesan bila ingin memperbarui kesimpulan."
                 )
 
-    # Voice typing (Web Speech API via streamlit-mic-recorder, tanpa reload halaman)
-    if speech_to_text is not None and not pending:
-        voice_text = speech_to_text(
-            language="id",
-            start_prompt="🎙 Voice Typing (Bahasa Indonesia)",
-            stop_prompt="⏹ Selesai bicara",
-            just_once=True,
-            use_container_width=False,
-            key="voice_stt",
-        )
-        if voice_text:
-            send_user_message(voice_text, question=st.session_state.pop("active_question", None))
-            st.rerun()
-
-    # Kotak input utama
-    placeholder = "Ketik jawaban pasien..." if active_q else "Ketik keluhan / jawaban pasien..."
+    # Kotak input utama (tombol mikrofon disisipkan ke dalamnya oleh render_voice_button)
+    placeholder = "Ketik atau ucapkan jawaban pasien..." if active_q else "Ketik atau ucapkan keluhan / jawaban pasien..."
     user_input = st.chat_input(placeholder, disabled=bool(pending))
     if user_input:
         send_user_message(user_input, question=st.session_state.pop("active_question", None))

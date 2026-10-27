@@ -5,13 +5,22 @@ from contextlib import closing
 
 DB_FILE = "anamnesis_local.db"
 
+# Kolom JSON pada tabel patients dan tipe datanya
+JSON_FIELDS = {"chief_complaints": list, "anamnesis": dict, "physical_exam": dict}
+PLAIN_FIELDS = ("name", "birth_date", "sex")
+_PATIENT_COLS = (
+    "mrn", "name", "birth_date", "sex", "chief_complaints",
+    "anamnesis", "physical_exam", "created_at", "updated_at",
+)
+
+
 def _connect():
     return sqlite3.connect(DB_FILE)
+
 
 def init_db():
     with closing(_connect()) as conn:
         with conn:
-            # Tabel konsultasi chat yang sudah ada dari Claude[cite: 45]
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS consultations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,36 +31,62 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # TABEL BARU: Profil Klinis & Pemeriksaan Fisik terikat ke No RM (MRN)
             conn.execute('''
-                CREATE TABLE IF NOT EXISTS patient_profiles (
-                    medical_record_no TEXT PRIMARY KEY,
-                    patient_name TEXT NOT NULL,
-                    gender TEXT DEFAULT '',
-                    age TEXT DEFAULT '',
-                    blood_pressure TEXT DEFAULT '',
-                    pulse TEXT DEFAULT '',
-                    temperature TEXT DEFAULT '',
-                    respiration TEXT DEFAULT '',
-                    weight TEXT DEFAULT '',
-                    height TEXT DEFAULT '',
-                    ekg_notes TEXT DEFAULT '',
-                    allergies TEXT DEFAULT '',
-                    pain_scale TEXT DEFAULT '',
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                CREATE TABLE IF NOT EXISTS patients (
+                    mrn TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    birth_date TEXT,
+                    sex TEXT,
+                    chief_complaints TEXT,
+                    anamnesis TEXT,
+                    physical_exam TEXT,
+                    created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
+                    updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
                 )
             ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS patient_supporting (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mrn TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    recorded_on TEXT,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS anamnesis_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mrn TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    codes TEXT,
+                    created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+                )
+            ''')
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_supporting_mrn ON patient_supporting(mrn)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_results_mrn ON anamnesis_results(mrn)")
 
+            # Migrasi: masukkan pasien dari roomchat lama ke tabel patients
+            conn.execute('''
+                INSERT OR IGNORE INTO patients (mrn, name)
+                SELECT medical_record_no, patient_name FROM consultations
+            ''')
+
+
+# ---------------------------------------------------------------------------
+# Roomchat (consultations)
+# ---------------------------------------------------------------------------
 def save_or_update_consultation(patient_name: str, medical_record_no: str, messages: list, quick_actions: list):
     messages_json = json.dumps(messages, ensure_ascii=False)
     actions_json = json.dumps(quick_actions, ensure_ascii=False)
+
     with closing(_connect()) as conn:
         with conn:
             row = conn.execute(
                 "SELECT id FROM consultations WHERE medical_record_no = ?",
                 (medical_record_no,),
             ).fetchone()
+
             if row:
                 conn.execute(
                     '''
@@ -70,15 +105,18 @@ def save_or_update_consultation(patient_name: str, medical_record_no: str, messa
                     (patient_name, medical_record_no, messages_json, actions_json),
                 )
 
+
 def get_all_consultations():
     if not os.path.exists(DB_FILE):
         return []
+
     with closing(_connect()) as conn:
         rows = conn.execute('''
             SELECT id, patient_name, medical_record_no, messages, quick_actions, created_at
             FROM consultations
             ORDER BY created_at DESC, id DESC
         ''').fetchall()
+
     consultations = []
     for r in rows:
         consultations.append({
@@ -91,10 +129,13 @@ def get_all_consultations():
         })
     return consultations
 
+
 def delete_consultation(mrn):
+    """Hanya menghapus roomchat. Data pasien & hasil anamnesis tetap tersimpan."""
     with closing(_connect()) as conn:
         with conn:
             conn.execute("DELETE FROM consultations WHERE medical_record_no = ?", (mrn,))
+
 
 def update_patient_name(mrn, new_name):
     with closing(_connect()) as conn:
@@ -103,46 +144,149 @@ def update_patient_name(mrn, new_name):
                 "UPDATE consultations SET patient_name = ? WHERE medical_record_no = ?",
                 (new_name, mrn),
             )
+            conn.execute("INSERT OR IGNORE INTO patients (mrn, name) VALUES (?, ?)", (mrn, new_name))
+            conn.execute(
+                "UPDATE patients SET name = ?, updated_at = datetime('now','localtime') WHERE mrn = ?",
+                (new_name, mrn),
+            )
 
-# --- FUNGSI BARU UNTUK PROFIL KLINIS & PEMERIKSAAN FISIK ---
-def save_patient_profile(mrn, name, gender, age, bp, pulse, temp, resp, weight, height, ekg, allergies, pain):
+
+# ---------------------------------------------------------------------------
+# Data pasien
+# ---------------------------------------------------------------------------
+def _decode_patient(row) -> dict:
+    data = dict(zip(_PATIENT_COLS, row))
+    for field, typ in JSON_FIELDS.items():
+        try:
+            value = json.loads(data[field]) if data[field] else typ()
+        except Exception:
+            value = typ()
+        data[field] = value if isinstance(value, typ) else typ()
+    return data
+
+
+def ensure_patient(mrn: str, name: str):
+    """Buat pasien jika belum ada; jika sudah ada, perbarui namanya."""
     with closing(_connect()) as conn:
         with conn:
-            conn.execute('''
-                INSERT INTO patient_profiles 
-                (medical_record_no, patient_name, gender, age, blood_pressure, pulse, temperature, respiration, weight, height, ekg_notes, allergies, pain_scale, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(medical_record_no) DO UPDATE SET
-                    patient_name = excluded.patient_name,
-                    gender = excluded.gender,
-                    age = excluded.age,
-                    blood_pressure = excluded.blood_pressure,
-                    pulse = excluded.pulse,
-                    temperature = excluded.temperature,
-                    respiration = excluded.respiration,
-                    weight = excluded.weight,
-                    height = excluded.height,
-                    ekg_notes = excluded.ekg_notes,
-                    allergies = excluded.allergies,
-                    pain_scale = excluded.pain_scale,
-                    updated_at = CURRENT_TIMESTAMP
-            ''', (mrn, name, gender, age, bp, pulse, temp, resp, weight, height, ekg, allergies, pain))
+            conn.execute(
+                '''
+                INSERT INTO patients (mrn, name) VALUES (?, ?)
+                ON CONFLICT(mrn) DO UPDATE SET
+                    name = excluded.name,
+                    updated_at = datetime('now','localtime')
+                ''',
+                (mrn, name),
+            )
 
-def get_patient_profile(mrn):
-    if not os.path.exists(DB_FILE):
-        return None
+
+def get_patient(mrn: str):
     with closing(_connect()) as conn:
-        row = conn.execute('''
-            SELECT gender, age, blood_pressure, pulse, temperature, respiration, weight, height, ekg_notes, allergies, pain_scale
-            FROM patient_profiles WHERE medical_record_no = ?
-        ''', (mrn,)).fetchone()
-        if row:
-            return {
-                "gender": row[0], "age": row[1], "blood_pressure": row[2],
-                "pulse": row[3], "temperature": row[4], "respiration": row[5],
-                "weight": row[6], "height": row[7], "ekg_notes": row[8],
-                "allergies": row[9], "pain_scale": row[10]
-            }
-    return None
+        row = conn.execute(
+            f"SELECT {', '.join(_PATIENT_COLS)} FROM patients WHERE mrn = ?", (mrn,)
+        ).fetchone()
+    return _decode_patient(row) if row else None
+
+
+def list_patients() -> list:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join(_PATIENT_COLS)} FROM patients ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    return [_decode_patient(r) for r in rows]
+
+
+def update_patient(mrn: str, **fields):
+    """Perbarui sebagian kolom pasien. Kolom yang diizinkan: name, birth_date, sex,
+    chief_complaints (list), anamnesis (dict), physical_exam (dict)."""
+    allowed = set(PLAIN_FIELDS) | set(JSON_FIELDS)
+    sets, values = [], []
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key in JSON_FIELDS:
+            value = json.dumps(value, ensure_ascii=False)
+        sets.append(f"{key} = ?")
+        values.append(value)
+    if not sets:
+        return
+    sets.append("updated_at = datetime('now','localtime')")
+
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO patients (mrn, name) VALUES (?, ?)",
+                (mrn, fields.get("name") or mrn),
+            )
+            conn.execute(
+                f"UPDATE patients SET {', '.join(sets)} WHERE mrn = ?",
+                (*values, mrn),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Data penunjang
+# ---------------------------------------------------------------------------
+def add_supporting(mrn: str, category: str, content: str, recorded_on: str = None):
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO patient_supporting (mrn, category, recorded_on, content) VALUES (?, ?, ?, ?)",
+                (mrn, category, recorded_on, content),
+            )
+
+
+def list_supporting(mrn: str) -> list:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            '''
+            SELECT id, category, recorded_on, content, created_at
+            FROM patient_supporting WHERE mrn = ? ORDER BY id DESC
+            ''',
+            (mrn,),
+        ).fetchall()
+    return [
+        {"id": r[0], "category": r[1], "recorded_on": r[2], "content": r[3], "created_at": r[4]}
+        for r in rows
+    ]
+
+
+def delete_supporting(item_id: int):
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute("DELETE FROM patient_supporting WHERE id = ?", (item_id,))
+
+
+# ---------------------------------------------------------------------------
+# Hasil anamnesis AI
+# ---------------------------------------------------------------------------
+def save_anamnesis_result(mrn: str, summary: str, codes: list):
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO anamnesis_results (mrn, summary, codes) VALUES (?, ?, ?)",
+                (mrn, summary, json.dumps(codes or [], ensure_ascii=False)),
+            )
+
+
+def list_anamnesis_results(mrn: str, limit: int = 20) -> list:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            '''
+            SELECT id, summary, codes, created_at
+            FROM anamnesis_results WHERE mrn = ? ORDER BY id DESC LIMIT ?
+            ''',
+            (mrn, limit),
+        ).fetchall()
+
+    results = []
+    for r in rows:
+        try:
+            codes = json.loads(r[2]) if r[2] else []
+        except Exception:
+            codes = []
+        results.append({"id": r[0], "summary": r[1], "codes": codes, "created_at": r[3]})
+    return results
+
 
 init_db()

@@ -2,13 +2,14 @@ import json
 import os
 import re
 import time
+from difflib import SequenceMatcher
 
 import streamlit as st
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from modules.rag_snomed import lookup_term, search_candidates
+from modules.rag_snomed import search_candidates
 
 load_dotenv()
 
@@ -17,13 +18,14 @@ MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 FALLBACK_MODELS = os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.8-flash")
 THINKING_BUDGET = os.getenv("GEMINI_THINKING_BUDGET", "0").strip()
 THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "").strip()
-MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "800"))
+MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "900"))
 REQUEST_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "25"))
 
 MAX_HISTORY_MESSAGES = 10
-RETRIEVAL_MESSAGES = 6        # jumlah jawaban terakhir yang dipakai mencari kandidat SNOMED
+RETRIEVAL_MESSAGES = 6        # jumlah jawaban terakhir yang dipakai mencari istilah referensi
 SNOMED_K_PER_QUERY = 3
-SNOMED_MAX_CANDIDATES = 15
+SNOMED_MAX_CANDIDATES = 12
+MAX_FINDINGS = 8
 
 DELIMITER = "===DATA==="
 # Toleran terhadap variasi penulisan model: "==DATA", "===DATA", "=== DATA ===", dst.
@@ -48,31 +50,35 @@ SYSTEM_TEMPLATE = """Anda adalah asisten klinis (AI agent) untuk dokter/staf med
 
 SUMBER FAKTA:
 - Pesan dari staf medis berformat "Pertanyaan dokter: ... / Jawaban pasien: ..." atau catatan bebas.
-- HANYA isi "Jawaban pasien" atau catatan bebas yang dianggap fakta klinis. "Pertanyaan dokter" BUKAN fakta. Jangan menyimpulkan gejala dari pertanyaan saja.
+- Yang dianggap fakta: isi "Jawaban pasien", catatan bebas, dan DATA PASIEN TERSIMPAN di bawah. "Pertanyaan dokter" BUKAN fakta. Jangan menyimpulkan gejala dari pertanyaan saja.
+- Jangan menanyakan ulang informasi yang sudah ada di DATA PASIEN TERSIMPAN. Gunakan tanda vital, pemeriksaan fisik, dan data penunjang (bila ada) untuk menilai kemungkinan diagnosis.
 - Jawaban negatif/ambigu ("tidak", "belum tahu") dicatat apa adanya. Jangan mengarang informasi.
+
+DATA PASIEN TERSIMPAN:
+{{DATA_PASIEN}}
 
 ALUR:
 A. Jika informasi belum cukup -> status "ask": tanggapi jawaban terakhir (maksimal 3 kalimat), lalu beri 3 pertanyaan lanjutan BARU yang singkat tentang topik yang belum digali (karakteristik nyeri, penjalaran, durasi, pemicu/peredam, gejala penyerta, riwayat penyakit, obat, faktor risiko: merokok, hipertensi, diabetes, kolesterol, riwayat keluarga).
-B. Status "final" jika (1) minimal 4 jawaban pasien yang konkret sudah terkumpul dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan. Tulis kesimpulan ringkas dengan struktur:
+B. Status "final" jika (1) minimal 4 jawaban pasien yang konkret (atau data tersimpan yang setara) sudah terkumpul dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan. Tulis kesimpulan ringkas dengan struktur:
 Ringkasan gejala: ...
 Dugaan diagnosis (urut dari paling mungkin, maksimal 3): ...
 Dasar: ...
 Tanda bahaya / saran pemeriksaan lanjutan: ...
 Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
 
-KODE SNOMED CT:
-- Daftar referensi di bawah hanyalah KANDIDAT istilah, bukan fakta tentang pasien.
-- Pilih HANYA concept_id yang persis ada di daftar. Dilarang mengarang kode.
-- Boleh beberapa kode. Kategori: "gejala", "faktor_risiko", "diagnosis". Hanya sertakan yang didukung jawaban pasien dan paling mendekati.
-- Status "ask": codes harus []. Status "final": isi codes; jika tidak ada yang cocok, beri kode paling mendekati [].
+TEMUAN UNTUK KODE SNOMED CT:
+- Anda TIDAK menulis kode angka. Sebutkan konsep klinisnya di "findings"; sistem akan mencari kode SNOMED CT terdekat dari database.
+- Setiap temuan: "label" (istilah Indonesia), "term_en" (istilah medis Inggris baku, sependek mungkin, mis. "chest pain", "hypertension", "angina pectoris"), "kategori": "gejala" atau "faktor_risiko" atau "diagnosis".
+- Status "ask": findings harus [].
+- Status "final": WAJIB isi findings: minimal 1 gejala dan 1-3 dugaan diagnosis, ditambah faktor risiko bila ada. Walau tidak pasti, tetap tulis dugaan yang paling mendekati (di teks tandai sebagai dugaan). Jangan mengosongkan findings.
 
-Referensi SNOMED CT (concept_id | istilah):
+Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulisan term_en; pakai bila relevan):
 {{REFERENSI}}
 
 FORMAT OUTPUT (wajib persis, tanpa teks lain):
 [teks tanggapan atau kesimpulan]
 {{DELIM}}
-{"status": "ask atau final", "quick_actions": ["...", "...", "..."], "codes": [{"concept_id": "123456", "kategori": "gejala"}]}
+{"status": "ask atau final", "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
 Pada status "final", "quick_actions" harus [].
 Baris pemisah harus persis "{{DELIM}}" (tiga tanda sama dengan di kiri DAN kanan) pada baris tersendiri, tidak boleh dihilangkan atau diubah."""
 
@@ -167,7 +173,6 @@ def visible_part(raw: str) -> str:
     head, _, found = split_data_block(raw)
     if found:
         return head
-    # sembunyikan potongan pemisah yang belum lengkap di akhir stream
     m = PARTIAL_DELIMITER_RE.search(raw)
     if m:
         return raw[:m.start()]
@@ -175,7 +180,7 @@ def visible_part(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Retrieval kandidat SNOMED (per jawaban pasien, bukan satu kalimat gabungan)
+# Istilah referensi SNOMED untuk prompt (dari ucapan pasien)
 # ---------------------------------------------------------------------------
 def _clean_query(text: str) -> str:
     return " ".join(re.sub(r"(Pertanyaan dokter|Jawaban pasien):", " ", text).split())
@@ -207,20 +212,26 @@ def codes_to_text(codes) -> str:
     """Teks kode untuk konteks LLM pada pesan kesimpulan sebelumnya."""
     if not codes:
         return ""
-    lines = [f"- {c['kategori']}: {c['term']} ({c['conceptId']})" for c in codes]
+    lines = [f"- {c.get('kategori', '')}: {c['term']} ({c['conceptId']})" for c in codes]
     return "\n\nKode SNOMED CT:\n" + "\n".join(lines)
 
 
-def build_system_prompt(candidates: dict) -> str:
+def build_system_prompt(candidates: dict, patient_context: str = "") -> str:
     if candidates:
-        ref = "\n".join(f"- {cid} | {term}" for cid, term in candidates.items())
+        ref = "\n".join(f"- {term}" for term in candidates.values())
     else:
-        ref = "(tidak ada kandidat)"
-    return SYSTEM_TEMPLATE.replace("{{REFERENSI}}", ref).replace("{{DELIM}}", DELIMITER)
+        ref = "(tidak ada)"
+    data_pasien = (patient_context or "").strip() or "(belum ada data tersimpan)"
+    return (
+        SYSTEM_TEMPLATE
+        .replace("{{REFERENSI}}", ref)
+        .replace("{{DELIM}}", DELIMITER)
+        .replace("{{DATA_PASIEN}}", data_pasien)
+    )
 
 
-def build_messages(user_input: str, chat_history: list, candidates: dict) -> list:
-    messages = [SystemMessage(content=build_system_prompt(candidates))]
+def build_messages(user_input: str, chat_history: list, candidates: dict, patient_context: str = "") -> list:
+    messages = [SystemMessage(content=build_system_prompt(candidates, patient_context))]
 
     window = list(chat_history[-MAX_HISTORY_MESSAGES:])
     # Gemini mewajibkan percakapan diawali pesan user
@@ -299,18 +310,18 @@ def _stream_llm(messages: list):
     raise RuntimeError("Semua model gagal -> " + " | ".join(errors))
 
 
-def stream_anamnesis_response(user_input: str, chat_history: list):
+def stream_anamnesis_response(user_input: str, chat_history: list, patient_context: str = ""):
     """Generator potongan teks mentah dari Gemini (satu panggilan LLM per pesan)."""
     t0 = time.perf_counter()
     candidates = get_candidates(user_input, chat_history)
-    messages = build_messages(user_input, chat_history, candidates)
+    messages = build_messages(user_input, chat_history, candidates, patient_context)
     t_retrieval = time.perf_counter() - t0
 
     first = True
     for text in _stream_llm(messages):
         if first:
             print(
-                f"[timing] retrieval={t_retrieval:.2f}s ({len(candidates)} kandidat) | "
+                f"[timing] retrieval={t_retrieval:.2f}s ({len(candidates)} istilah) | "
                 f"token_pertama={time.perf_counter() - t0:.2f}s"
             )
             first = False
@@ -319,7 +330,111 @@ def stream_anamnesis_response(user_input: str, chat_history: list):
 
 
 # ---------------------------------------------------------------------------
-# Parsing & validasi hasil
+# Pemetaan temuan -> kode SNOMED CT terdekat (dilakukan oleh kode, bukan LLM)
+# ---------------------------------------------------------------------------
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
+def _ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, _norm(a), _norm(b)).ratio()
+
+
+def match_label(query: str, term: str) -> str:
+    """tepat / mirip / terdekat, berdasarkan kemiripan teks istilah."""
+    r = _ratio(query, term)
+    q_words, t_words = set(_norm(query).split()), set(_norm(term).split())
+    if r >= 0.9:
+        return "tepat"
+    if r >= 0.6 or (q_words and q_words <= t_words):
+        return "mirip"
+    return "terdekat"
+
+
+def find_best_concept(term_en: str, label: str):
+    """Cari konsep SNOMED terdekat untuk satu temuan. Return (konsep, label_kecocokan) atau None."""
+    pool, seen = [], set()
+    for query, k in ((term_en, 5), (label, 3)):
+        query = (query or "").strip()
+        if not query:
+            continue
+        try:
+            hits = search_candidates(query, k)
+        except Exception as e:
+            print(f"[rag] pencarian '{query}' gagal: {e}")
+            hits = []
+        for hit in hits:
+            if hit["conceptId"] not in seen:
+                seen.add(hit["conceptId"])
+                pool.append(hit)
+
+    if not pool:
+        return None
+
+    ref = term_en or label
+    best = max(pool, key=lambda h: _ratio(ref, h["term"]))
+    # Jika tidak ada yang cukup mirip secara teks, percayakan urutan kemiripan vektor
+    if _ratio(ref, best["term"]) < 0.5:
+        best = pool[0]
+    return best, match_label(ref, best["term"])
+
+
+def map_findings_to_codes(findings) -> list:
+    codes, seen = [], set()
+    if not isinstance(findings, list):
+        return codes
+
+    for item in findings[:MAX_FINDINGS]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip()
+        term_en = str(item.get("term_en", "")).strip()
+        if not (label or term_en):
+            continue
+
+        found = find_best_concept(term_en, label)
+        if not found:
+            continue
+        hit, match = found
+        if hit["conceptId"] in seen:
+            continue
+        seen.add(hit["conceptId"])
+
+        kategori = str(item.get("kategori", "")).strip().lower()
+        if kategori not in VALID_CATEGORIES:
+            kategori = "lainnya"
+        codes.append({
+            "conceptId": hit["conceptId"],
+            "term": hit["term"],
+            "kategori": kategori,
+            "label": label or term_en,
+            "match": match,
+        })
+    return codes
+
+
+def fallback_codes(text: str, candidates: dict) -> list:
+    """Jaring pengaman: jika AI tidak memberi temuan, pakai konsep terdekat dari percakapan."""
+    hits = [{"conceptId": cid, "term": term} for cid, term in list(candidates.items())[:3]]
+    if not hits and text:
+        try:
+            hits = search_candidates(" ".join(text.split())[:200], 3)
+        except Exception:
+            hits = []
+    return [
+        {
+            "conceptId": h["conceptId"],
+            "term": h["term"],
+            "kategori": "lainnya",
+            "label": h["term"],
+            "match": "terdekat",
+        }
+        for h in hits
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Parsing hasil
 # ---------------------------------------------------------------------------
 def _load_json_object(text: str):
     cleaned = re.sub(r"```json|```", "", text).strip()
@@ -333,41 +448,14 @@ def _load_json_object(text: str):
         return None
 
 
-def verify_codes(raw_codes, candidates: dict):
-    """Buang kode yang tidak ada di database SNOMED (anti-halusinasi).
-    Return: (daftar kode valid, jumlah kode yang dibuang)."""
-    verified, dropped, seen = [], 0, set()
-    if not isinstance(raw_codes, list):
-        return verified, dropped
-
-    for item in raw_codes:
-        if not isinstance(item, dict):
-            dropped += 1
-            continue
-        cid = re.sub(r"\D", "", str(item.get("concept_id", "")))
-        if not cid or cid in seen:
-            continue
-
-        term = candidates.get(cid)
-        if not term:
-            try:
-                term = lookup_term(cid)
-            except Exception:
-                term = ""
-        if not term:
-            dropped += 1
-            continue
-
-        seen.add(cid)
-        kategori = str(item.get("kategori", "")).strip().lower()
-        if kategori not in VALID_CATEGORIES:
-            kategori = "lainnya"
-        verified.append({"conceptId": cid, "term": term, "kategori": kategori})
-
-    return verified, dropped
+def _as_final(result: dict, codes: list, candidates: dict) -> dict:
+    result["status"] = "final"
+    result["quick_actions"] = []
+    result["codes"] = codes or fallback_codes(result["text"], candidates)
+    return result
 
 
-def parse_response(raw: str, candidates: dict = None) -> dict:
+def parse_response(raw: str, candidates: dict = None, force_final: bool = False) -> dict:
     """Return dict: text, status ('ask'/'final'), quick_actions, codes, dropped."""
     candidates = candidates or {}
     head, tail, found = split_data_block(raw)
@@ -380,24 +468,22 @@ def parse_response(raw: str, candidates: dict = None) -> dict:
         "dropped": 0,
     }
 
-    if not found:
-        return result
+    data = _load_json_object(tail) if found else None
 
-    data = _load_json_object(tail)
-    if not data:
-        return result
+    if data and str(data.get("status", "ask")).strip().lower() == "final":
+        return _as_final(result, map_findings_to_codes(data.get("findings")), candidates)
 
-    if str(data.get("status", "ask")).strip().lower() == "final":
-        result["status"] = "final"
-        result["quick_actions"] = []
-        result["codes"], result["dropped"] = verify_codes(data.get("codes"), candidates)
-    else:
+    if data:
         items = data.get("quick_actions")
         if isinstance(items, list):
             cleaned = [str(x).strip() for x in items if str(x).strip()]
             if cleaned:
                 result["quick_actions"] = cleaned[:3]
+        return result
 
+    # JSON tidak terbaca, tetapi dokter meminta kesimpulan: tetap beri kode terdekat
+    if force_final:
+        return _as_final(result, [], candidates)
     return result
 
 
