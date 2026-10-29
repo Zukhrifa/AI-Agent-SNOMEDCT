@@ -4,3 +4,7 @@ __pycache__/
 chroma_db/
 
 snomed_cardio_subset2.csv
+
+.streamlit/secrets.toml
+
+anamnesis_local.db

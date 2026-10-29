@@ -10,3 +10,5 @@ python-dotenv
 langchain-core
 sentence-transformers
 google-generativeai
+libsql-client
+requests
