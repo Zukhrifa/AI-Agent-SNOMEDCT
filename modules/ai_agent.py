@@ -35,7 +35,7 @@ PARTIAL_DELIMITER_RE = re.compile(r"=+\s*(?:D|DA|DAT)?$", re.IGNORECASE)
 
 CONTROL_PREFIX = "Permintaan dokter:"
 FINAL_REQUEST_TEXT = (
-    f"{CONTROL_PREFIX} mohon berikan kesimpulan dugaan diagnosis beserta kode SNOMED CT "
+    f"{CONTROL_PREFIX} mohon berikan kesimpulan dugaan diagnosis beserta kode SNOMED CT yang ada di chromadb dan harus akurat, bukan angka asal "
     "berdasarkan informasi yang sudah terkumpul."
 )
 REGENERATE_REQUEST_TEXT = (
