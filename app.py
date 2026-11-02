@@ -18,6 +18,12 @@ from modules.ai_agent import DEFAULT_QUICK_ACTIONS
 from modules.rag_snomed import warmup
 
 st.set_page_config(page_title="Medical Anamnesis System", page_icon="🩺", layout="wide")
+from auth.session import require_login
+from components.admin_profile import render_admin_profile_page
+user = require_login()
+if st.session_state.get("show_profile"):
+    render_admin_profile_page()
+    st.stop()
 
 NEW_PATIENT = "➕ Pasien baru"
 
