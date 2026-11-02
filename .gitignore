@@ -1,0 +1,9 @@
+.env
+__pycache__/
+
+.streamlit/secrets.toml
+
+anamnesis_local.db
+chroma_db/
+chroma_db/*
+*.db

@@ -1,0 +1,86 @@
+import streamlit as st
+from database import get_all_consultations, get_patient_profile, save_patient_profile, get_patient_history_by_mrn
+
+def render_patient_database_view():
+    st.subheader("📋 Direktori Data Pasien & Rekam Medis (EMR)")
+    st.write("Kelola dan lihat riwayat pemeriksaan fisik serta rekam medis seluruh pasien yang terdaftar di sistem.")
+    
+    # Ambil daftar seluruh konsultasi/pasien unik berdasarkan MRN
+    consultations = get_all_consultations()
+    if not consultations:
+        st.info("Belum ada data pasien yang tersimpan di database.")
+        return
+        
+    # Buat dictionary unik berdasarkan MRN agar tidak duplikat di list view
+    unique_patients = {}
+    for c in consultations:
+        mrn = c['mrn']
+        if mrn not in unique_patients:
+            unique_patients[mrn] = c['name']
+            
+    # Pilih pasien dari dropdown atau tabel ringkas
+    patient_options = [f"{name} ({mrn})" for mrn, name in unique_patients.items()]
+    selected_option = st.selectbox("Cari / Pilih Pasien Berdasarkan Nama & MRN", patient_options)
+    
+    if selected_option:
+        # Ekstrak MRN dari string pilihan (format: "Nama (MRN)")
+        selected_mrn = selected_option.split("(")[-1].strip(")")
+        selected_name = selected_option.split("(")[0].strip()
+        
+        st.markdown("---")
+        st.markdown(f"### 🗂️ Profil Medis: **{selected_name}**")
+        st.caption(f"Nomor Rekam Medis (MRN): `{selected_mrn}`")
+        
+        # Ambil profil klinis & pemeriksaan fisik
+        profile = get_patient_profile(selected_mrn) or {}
+        
+        # Form Edit / Lihat Profil Klinis & Pemeriksaan Fisik
+        with st.form(f"form_db_patient_{selected_mrn}"):
+            st.markdown("#### 🩺 Pemeriksaan Fisik & Tanda Vital Terakhir")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                e_gender = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan"], index=0 if profile.get("gender")=="Laki-laki" else 1)
+                e_age = st.text_input("Umur (Tahun)", value=profile.get("age", ""))
+            with c2:
+                e_bp = st.text_input("Tekanan Darah (TD)", value=profile.get("blood_pressure", ""), placeholder="cth: 140/80")
+                e_pulse = st.text_input("Nadi (x/menit)", value=profile.get("pulse", ""))
+            with c3:
+                e_temp = st.text_input("Suhu (°C)", value=profile.get("temperature", ""))
+                e_resp = st.text_input("Respirasi (x/menit)", value=profile.get("respiration", ""))
+            with c4:
+                e_weight = st.text_input("Berat Badan (kg)", value=profile.get("weight", ""))
+                e_height = st.text_input("Tinggi Badan (cm)", value=profile.get("height", ""))
+                
+            st.markdown("---")
+            c_a, c_b = st.columns(2)
+            with c_a:
+                e_allergies = st.text_input("Alergi", value=profile.get("allergies", "-"))
+                e_pain = st.text_input("Skala Nyeri (0-10)", value=profile.get("pain_scale", "0"))
+            with c_b:
+                e_ekg = st.text_area("Catatan EKG / Pemeriksaan Fisik Tambahan", value=profile.get("ekg_notes", "-"))
+                
+            submitted_update = st.form_submit_button("💾 Simpan Perubahan Data Medis")
+            if submitted_update:
+                save_patient_profile(
+                    selected_mrn, selected_name, e_gender, e_age, 
+                    e_bp, e_pulse, e_temp, e_resp, e_weight, e_height, 
+                    e_ekg, e_allergies, e_pain
+                >
+                )
+                st.success("Data rekam medis pasien berhasil diperbarui!")
+                st.rerun()
+                
+        st.markdown("---")
+        st.markdown("#### 📜 Riwayat Sesi Konsultasi & Anamnesis Sebelumnya")
+        history = get_patient_history_by_mrn(selected_mrn)
+        if not history:
+            st.info("Belum ada riwayat sesi anamnesis untuk pasien ini.")
+        else:
+            for idx, h in enumerate(history):
+                with st.expander(f"Sesi Kunjungan ke-{len(history)-idx} — Waktu: {h['created_at']}"):
+                    st.write(f"**Total Percakapan Sesi Ini:** {len(h['messages'])} pesan")
+                    if h['messages']:
+                        st.markdown("**Transkrip / Interaksi Terakhir:**")
+                        for msg in h['messages']:
+                            role_txt = "🤖 AI Agent" if msg['role'] == "assistant" else "👤 Staf Medis"
+                            st.caption(f"- **{role_txt}:** {msg['content'][:200]}...")

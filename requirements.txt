@@ -1,0 +1,14 @@
+streamlit
+langchain
+langchain-chroma
+langchain-google-genai
+langchain-community
+langchain-huggingface
+pandas
+streamlit-mic-recorder
+python-dotenv
+langchain-core
+sentence-transformers
+google-generativeai
+libsql-client
+requests
