@@ -30,40 +30,16 @@ def resolve_embedding_model() -> str:
     return LEGACY_EMBEDDING_MODEL
 
 
-def auto_build_chroma_if_empty():
-    """Rakit chroma_db dari CSV jika kosong. Idempotent (pakai id) & collection sama dengan pembaca."""
-    if os.path.exists(CHROMA_PATH) and os.listdir(CHROMA_PATH):
-        return
-    if not os.path.exists(CSV_MASTER_FILE):
-        print(f"[Auto-Build] File master {CSV_MASTER_FILE} tidak ditemukan!")
-        return
-    try:
-        import hashlib
-        df = pd.read_csv(CSV_MASTER_FILE, dtype=str)
-        if "active" in df.columns:
-            df = df[df["active"].astype(str).str.strip() == "1"]
-        df = df[["conceptId", "term"]].dropna().drop_duplicates()
-        embeddings = HuggingFaceEmbeddings(
-            model_name=resolve_embedding_model(), model_kwargs={"device": "cpu"}
-        )
-        vs = Chroma(
-            persist_directory=CHROMA_PATH,
-            embedding_function=embeddings,
-            collection_name=COLLECTION_NAME,
-        )
-        texts = df["term"].tolist()
-        cids = df["conceptId"].tolist()
-        metas = [{"conceptId": str(c), "term": str(t)} for c, t in zip(cids, texts)]
-        ids = [f"{c}_{hashlib.md5(t.encode()).hexdigest()[:10]}" for c, t in zip(cids, texts)]
-        for i in range(0, len(texts), 5000):
-            vs.add_texts(texts=texts[i:i + 5000], metadatas=metas[i:i + 5000], ids=ids[i:i + 5000])
-        print(f"[Auto-Build] Berhasil merakit {len(texts)} data ke ChromaDB!")
-    except Exception as e:
-        print(f"[Auto-Build] Gagal merakit database: {e}")
+def _chroma_available() -> bool:
+    return os.path.isdir(CHROMA_PATH) and any(os.scandir(CHROMA_PATH))
 
 
 @st.cache_resource(show_spinner=False)
 def get_cached_vectorstore():
+    """None jika chroma_db tidak ada (mis. di Streamlit Cloud): pencarian semantik dinonaktifkan."""
+    if not _chroma_available():
+        print("[rag] chroma_db tidak ditemukan -> hanya pencarian teks dari CSV")
+        return None
     embeddings = HuggingFaceEmbeddings(
         model_name=resolve_embedding_model(), model_kwargs={"device": "cpu"}
     )
@@ -72,6 +48,14 @@ def get_cached_vectorstore():
         embedding_function=embeddings,
         collection_name=COLLECTION_NAME,
     )
+
+
+def _find_csv() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (CSV_MASTER_FILE, os.path.join(here, CSV_MASTER_FILE), os.path.join(os.path.dirname(here), CSV_MASTER_FILE)):
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError(f"{CSV_MASTER_FILE} tidak ditemukan (pastikan ikut di-push ke GitHub)")
 
 
 def _legacy_term(content: str) -> str:
@@ -98,14 +82,14 @@ def _norm(text: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def get_search_index() -> dict:
-    """Dibangun SEKALI: daftar entri + indeks terbalik token -> posisi entri (pencarian awalan via bisect)."""
-    collection = get_cached_vectorstore()._collection
-    data = collection.get(include=["documents", "metadatas"])
+    """Dibangun SEKALI dari CSV (tidak butuh ChromaDB): daftar entri + indeks terbalik token -> posisi entri (pencarian awalan via bisect)."""
+    df = pd.read_csv(_find_csv(), dtype=str)
+    if "active" in df.columns:
+        df = df[df["active"].astype(str).str.strip() == "1"]
+    df = df[["conceptId", "term"]].dropna().drop_duplicates()
     entries, seen = [], set()
-    for doc, meta in zip(data.get("documents") or [], data.get("metadatas") or []):
-        meta = meta or {}
-        concept_id = str(meta.get("conceptId", "")).strip()
-        term = meta.get("term") or _legacy_term(doc)
+    for concept_id, term in zip(df["conceptId"], df["term"]):
+        concept_id = str(concept_id).strip()
         if is_junk(concept_id, term):
             continue
         norm = _norm(term)
@@ -127,7 +111,9 @@ def get_term_index() -> list:
 
 @st.cache_resource(show_spinner=False)
 def warmup() -> bool:
-    get_cached_vectorstore().similarity_search("chest pain", k=1)  # muat model embedding
+    vs = get_cached_vectorstore()
+    if vs is not None:
+        vs.similarity_search("chest pain", k=1)  # muat model embedding
     try:
         get_search_index()
     except Exception as e:
@@ -184,7 +170,10 @@ def search_candidates(query: str, k: int = 3) -> list:
     query = " ".join(query.split())[:300]
     if not query:
         return []
-    docs = get_cached_vectorstore().similarity_search(query, k=k * 3)
+    vs = get_cached_vectorstore()
+    if vs is None:
+        return []
+    docs = vs.similarity_search(query, k=k * 3)
     results, seen = [], set()
     for d in docs:
         meta = d.metadata or {}
@@ -223,9 +212,9 @@ def search_terms(query: str, k: int = 8) -> list:
 
 
 def index_stats() -> dict:
-    vectorstore = get_cached_vectorstore()
+    vs = get_cached_vectorstore()
     try:
-        documents = vectorstore._collection.count()
+        documents = vs._collection.count() if vs is not None else 0
     except Exception:
         documents = -1
     try:
@@ -235,6 +224,6 @@ def index_stats() -> dict:
     return {
         "documents": documents,
         "terms": terms,
-        "model": resolve_embedding_model(),
-        "path": os.path.abspath(CHROMA_PATH),
+        "model": resolve_embedding_model() if vs is not None else "(semantik nonaktif)",
+        "path": os.path.abspath(CSV_MASTER_FILE),
     }

@@ -449,6 +449,9 @@ _TRANSLATE_CACHE = {}
 
 # Keluhan awam yang umum: diterjemahkan lokal (instan, tanpa API).
 _LOCAL_TERMS = {
+    "serangan jantung": ["myocardial infarction", "heart attack"],
+    "gagal jantung": ["heart failure"], "jantung koroner": ["coronary artery disease"],
+    "stroke": ["stroke"], "asma": ["asthma"], "maag": ["gastritis"],
     "pusing": ["dizziness"], "pening": ["dizziness"], "vertigo": ["vertigo"],
     "sesak napas": ["dyspnea"], "sesak nafas": ["dyspnea"], "sesak": ["dyspnea"],
     "nyeri dada": ["chest pain"], "dada sakit": ["chest pain"],
@@ -475,7 +478,7 @@ def translate_to_snomed_terms(query: str):
         return list(_TRANSLATE_CACHE[key]), ""
     messages = [SystemMessage(content=TRANSLATE_PROMPT), HumanMessage(content=query.strip())]
     try:
-        raw = "".join(_stream_llm(messages, max_tokens=80, timeout=8))
+        raw = "".join(_stream_llm(messages, max_tokens=80, timeout=15))
     except Exception as e:
         return [], friendly_error(e)[:200]
     terms = []
