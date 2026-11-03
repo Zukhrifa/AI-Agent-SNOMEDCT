@@ -1,9 +1,10 @@
-"""Hash password dan validasi input. Hanya memakai pustaka standar Python (tanpa dependensi baru)."""
+"""Hash password, enkripsi password sementara (Fernet, butuh paket `cryptography`), dan validasi input."""
 import base64
 import hashlib
 import hmac
 import os
 import re
+import secrets
 from functools import lru_cache
 
 ALGO = "pbkdf2_sha256"
@@ -13,7 +14,7 @@ MIN_PASSWORD_LEN = 10
 MAX_PASSWORD_LEN = 128
 
 _USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,32}$")
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_TEMP_ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # tanpa karakter yang mirip
 
 
 def _derive(password: str, salt: bytes, iterations: int) -> bytes:
@@ -69,13 +70,6 @@ def validate_username(username: str) -> str:
     return ""
 
 
-def validate_email(email: str) -> str:
-    email = (email or "").strip()
-    if email and not _EMAIL_RE.fullmatch(email):
-        return "Format email tidak valid."
-    return ""
-
-
 def validate_password(password: str) -> str:
     password = password or ""
     if len(password) < MIN_PASSWORD_LEN:
@@ -85,3 +79,33 @@ def validate_password(password: str) -> str:
     if not (re.search(r"[A-Za-z]", password) and re.search(r"\d", password)):
         return "Password harus mengandung huruf dan angka."
     return ""
+
+
+def generate_temp_password(length: int = 12) -> str:
+    while True:
+        candidate = "".join(secrets.choice(_TEMP_ALPHABET) for _ in range(length))
+        if not validate_password(candidate):
+            return candidate
+
+
+def _fernet(secret: str):
+    from cryptography.fernet import Fernet
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest()))
+
+
+def encrypt_secret(plain: str, secret: str) -> str:
+    """Token terenkripsi, atau '' jika kunci kosong / paket cryptography tidak tersedia."""
+    if not secret:
+        return ""
+    try:
+        return _fernet(secret).encrypt(plain.encode("utf-8")).decode("ascii")
+    except Exception:
+        return ""
+
+
+def decrypt_secret(token: str, secret: str) -> str:
+    """Teks asli, atau '' jika gagal (kunci berubah / data rusak)."""
+    try:
+        return _fernet(secret).decrypt(token.encode("ascii")).decode("utf-8")
+    except Exception:
+        return ""

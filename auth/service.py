@@ -1,31 +1,27 @@
-"""Logika bisnis autentikasi: bootstrap admin awal, login, ubah profil, ganti password."""
+"""Logika bisnis autentikasi: bootstrap admin awal, login, ubah profil, ganti password,
+serta kelola akun oleh admin (buat, reset password, aktif/nonaktif)."""
 import time
-
 from auth import security, users_db
 from database import _get_secret
-
 MAX_ATTEMPTS = 5
 LOCK_SECONDS = 15 * 60
 GENERIC_LOGIN_ERROR = "Username atau password salah."
-
+ROLES = ("admin", "dokter", "perawat")
+ROLE_LABEL = {"admin": "Admin", "dokter": "Dokter", "perawat": "Perawat"}
 _READY = False
-
-
 def public_user(user: dict) -> dict:
     """Data pengguna yang aman disimpan di session (tanpa hash dan data keamanan)."""
     return {
         "id": user["id"],
         "username": user["username"],
         "full_name": user["full_name"],
-        "email": user["email"],
         "role": user["role"],
         "is_active": bool(user["is_active"]),
         "must_change_password": bool(user["must_change_password"]),
+        "has_temp_password": bool(user.get("temp_password_enc")),
         "last_login_at": user["last_login_at"],
         "created_at": user["created_at"],
     }
-
-
 def _bootstrap_admin() -> str:
     """Jika belum ada pengguna sama sekali, buat admin pertama dari secrets/.env."""
     if users_db.count_users() > 0:
@@ -42,7 +38,6 @@ def _bootstrap_admin() -> str:
         users_db.create_user(
             username=username,
             full_name=_get_secret("ADMIN_FULL_NAME").strip() or "Administrator",
-            email="",
             role="admin",
             password_hash=security.hash_password(password),
             must_change=True,  # wajib ganti password saat login pertama
@@ -52,8 +47,6 @@ def _bootstrap_admin() -> str:
             print(f"[auth] gagal membuat admin awal: {e}")
             return "Gagal membuat admin awal."
     return ""
-
-
 def ensure_ready() -> str:
     """Siapkan tabel dan admin awal. Return pesan error (kosong jika siap)."""
     global _READY
@@ -68,8 +61,6 @@ def ensure_ready() -> str:
     if not error:
         _READY = True
     return error
-
-
 def authenticate(username: str, password: str):
     """Return (user_publik, '') jika berhasil, atau (None, pesan_error)."""
     username = security.normalize_username(username)
@@ -90,32 +81,74 @@ def authenticate(username: str, password: str):
     if not user["is_active"]:
         return None, "Akun dinonaktifkan. Hubungi admin."
     if security.needs_rehash(user["password_hash"]):
-        users_db.update_password(user["id"], security.hash_password(password), bool(user["must_change_password"]))
+        users_db.update_password(user["id"], security.hash_password(password),
+                                 bool(user["must_change_password"]))
     users_db.record_login(user["id"])
     return public_user(users_db.get_by_id(user["id"])), ""
-
-
 def reload_user(user_id: int):
     """Muat ulang data pengguna dari DB. None jika sudah dihapus atau dinonaktifkan."""
     user = users_db.get_by_id(user_id)
     if not user or not user["is_active"]:
         return None
     return public_user(user)
-
-
-def update_profile(user_id: int, full_name: str, email: str) -> str:
-    full_name, email = (full_name or "").strip(), (email or "").strip()
-    if not full_name:
-        return "Nama lengkap wajib diisi."
-    if len(full_name) > 100:
-        return "Nama lengkap maksimal 100 karakter."
-    error = security.validate_email(email)
+def _is_active_admin(actor_id: int) -> bool:
+    actor = users_db.get_by_id(actor_id)
+    return bool(actor and actor["is_active"] and actor["role"] == "admin")
+def list_accounts(actor_id: int) -> list:
+    """Khusus admin. Tiap akun membawa `temp_password` (teks asli, kosong jika sudah login)."""
+    if not _is_active_admin(actor_id):
+        return []
+    result = []
+    for u in users_db.list_users():
+        raw = u["temp_password_enc"] or ""
+        if raw.startswith("gAAAA"):  # sisa token terenkripsi versi lama: tidak terbaca, perlu Reset
+            raw = ""
+        result.append({**public_user(u), "temp_password": raw})
+    return result
+def create_account(actor_id: int, full_name: str, username: str, role: str) -> str:
+    """Hanya admin. Return pesan error, atau '' jika berhasil (password tampil di tabel)."""
+    if not _is_active_admin(actor_id):
+        return "Hanya admin yang dapat membuat akun."
+    full_name = (full_name or "").strip()
+    username = security.normalize_username(username)
+    if not full_name or len(full_name) > 100:
+        return "Nama lengkap wajib diisi (maksimal 100 karakter)."
+    error = security.validate_username(username)
     if error:
         return error
-    users_db.update_profile(user_id, full_name, email)
+    if role not in ROLES:
+        return "Peran tidak valid."
+    if users_db.get_by_username(username):
+        return "Username sudah dipakai."
+    plain = security.generate_temp_password()
+    try:
+        users_db.create_user(username, full_name, role, security.hash_password(plain),
+                             plain, must_change=True)
+    except Exception as e:
+        print(f"[auth] gagal membuat akun: {e}")
+        return "Gagal membuat akun (username mungkin sudah dipakai)."
     return ""
-
-
+def reset_password(actor_id: int, target_id: int) -> str:
+    """Hanya admin. Ganti password lama dengan password sementara baru. Return pesan error atau ''."""
+    if not _is_active_admin(actor_id):
+        return "Hanya admin yang dapat mereset password."
+    if not users_db.get_by_id(target_id):
+        return "Akun tidak ditemukan."
+    if target_id == actor_id:
+        return "Untuk akun sendiri, ganti password lewat menu Profil."
+    plain = security.generate_temp_password()
+    users_db.set_temp_password(target_id, security.hash_password(plain), plain)
+    return ""
+def set_active(actor_id: int, target_id: int, active: bool) -> str:
+    """Hanya admin. Aktifkan/nonaktifkan akun lain. Return pesan error atau ''."""
+    if not _is_active_admin(actor_id):
+        return "Hanya admin yang dapat mengubah status akun."
+    if target_id == actor_id:
+        return "Anda tidak dapat menonaktifkan akun sendiri."
+    if not users_db.get_by_id(target_id):
+        return "Akun tidak ditemukan."
+    users_db.set_active(target_id, active)
+    return ""
 def change_password(user_id: int, current: str, new: str, confirm: str) -> str:
     """Return pesan error, atau string kosong jika berhasil."""
     user = users_db.get_by_id(user_id)

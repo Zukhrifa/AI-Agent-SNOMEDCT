@@ -7,6 +7,7 @@ from auth import service
 
 _KEY = "auth_user"
 _CHECKED_AT = "auth_checked_at"
+_PAGE = "account_page"  # None | "profile" | "admin"
 RECHECK_SECONDS = 300  # akun yang dinonaktifkan admin kehilangan akses paling lambat 5 menit
 
 
@@ -29,6 +30,18 @@ def refresh_user() -> None:
 
 def logout() -> None:
     st.session_state.clear()  # bersihkan juga data pasien/chat dari sesi ini
+
+
+def open_account_page(page: str) -> None:
+    st.session_state[_PAGE] = page
+
+
+def close_account_page() -> None:
+    st.session_state[_PAGE] = None
+
+
+def current_account_page():
+    return st.session_state.get(_PAGE)
 
 
 def require_login() -> dict:

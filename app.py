@@ -1,7 +1,7 @@
 import random
 
 import streamlit as st
-
+from components.user_box import render_account_page   # taruh bersama import lainnya
 from components.chat_ui import render_chat_room, send_user_message
 from components.nav import go_to_patient_data, open_consultation
 from components.patient_data import render_patient_data_page
@@ -19,11 +19,9 @@ from modules.rag_snomed import warmup
 
 st.set_page_config(page_title="Medical Anamnesis System", page_icon="🩺", layout="wide")
 from auth.session import require_login
-from components.admin_profile import render_admin_profile_page
+from components.admin_profile import render_profile_page
 user = require_login()
-if st.session_state.get("show_profile"):
-    render_admin_profile_page()
-    st.stop()
+
 
 NEW_PATIENT = "➕ Pasien baru"
 
@@ -52,6 +50,8 @@ except Exception as e:
 
 # 3. Sidebar
 render_sidebar()
+if render_account_page():
+    st.stop()
 
 
 def render_new_consultation_form():
