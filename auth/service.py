@@ -1,7 +1,7 @@
 """Logika bisnis autentikasi: bootstrap admin awal, login, ubah profil, ganti password,
 serta kelola akun oleh admin (buat, reset password, aktif/nonaktif)."""
 import time
-from auth import security, users_db
+from auth import audit_log, security, users_db
 from database import _get_secret
 MAX_ATTEMPTS = 5
 LOCK_SECONDS = 15 * 60
@@ -54,6 +54,7 @@ def ensure_ready() -> str:
         return ""
     try:
         users_db.init_table()
+        audit_log.init_table()
         error = _bootstrap_admin()
     except Exception as e:
         print(f"[auth] database pengguna tidak dapat diakses: {e}")
@@ -77,13 +78,16 @@ def authenticate(username: str, password: str):
         return None, f"Terlalu banyak percobaan gagal. Coba lagi dalam {minutes} menit."
     if not security.verify_password(password, user["password_hash"]):
         users_db.register_failed_attempt(user["id"], MAX_ATTEMPTS, now + LOCK_SECONDS)
+        audit_log.log("login_gagal", detail="password salah", user=user)
         return None, GENERIC_LOGIN_ERROR
     if not user["is_active"]:
+        audit_log.log("login_gagal", detail="akun nonaktif", user=user)
         return None, "Akun dinonaktifkan. Hubungi admin."
     if security.needs_rehash(user["password_hash"]):
         users_db.update_password(user["id"], security.hash_password(password),
                                  bool(user["must_change_password"]))
     users_db.record_login(user["id"])
+    audit_log.log("login", user=user)
     return public_user(users_db.get_by_id(user["id"])), ""
 def reload_user(user_id: int):
     """Muat ulang data pengguna dari DB. None jika sudah dihapus atau dinonaktifkan."""
@@ -127,17 +131,20 @@ def create_account(actor_id: int, full_name: str, username: str, role: str) -> s
     except Exception as e:
         print(f"[auth] gagal membuat akun: {e}")
         return "Gagal membuat akun (username mungkin sudah dipakai)."
+    audit_log.log("akun_buat", detail=f"@{username} ({role})")
     return ""
 def reset_password(actor_id: int, target_id: int) -> str:
     """Hanya admin. Ganti password lama dengan password sementara baru. Return pesan error atau ''."""
     if not _is_active_admin(actor_id):
         return "Hanya admin yang dapat mereset password."
-    if not users_db.get_by_id(target_id):
+    target = users_db.get_by_id(target_id)
+    if not target:
         return "Akun tidak ditemukan."
     if target_id == actor_id:
         return "Untuk akun sendiri, ganti password lewat menu Profil."
     plain = security.generate_temp_password()
     users_db.set_temp_password(target_id, security.hash_password(plain), plain)
+    audit_log.log("akun_reset", detail=f"@{target['username']}")
     return ""
 def set_active(actor_id: int, target_id: int, active: bool) -> str:
     """Hanya admin. Aktifkan/nonaktifkan akun lain. Return pesan error atau ''."""
@@ -145,9 +152,11 @@ def set_active(actor_id: int, target_id: int, active: bool) -> str:
         return "Hanya admin yang dapat mengubah status akun."
     if target_id == actor_id:
         return "Anda tidak dapat menonaktifkan akun sendiri."
-    if not users_db.get_by_id(target_id):
+    target = users_db.get_by_id(target_id)
+    if not target:
         return "Akun tidak ditemukan."
     users_db.set_active(target_id, active)
+    audit_log.log("akun_aktif" if active else "akun_nonaktif", detail=f"@{target['username']}")
     return ""
 def change_password(user_id: int, current: str, new: str, confirm: str) -> str:
     """Return pesan error, atau string kosong jika berhasil."""
@@ -168,4 +177,5 @@ def change_password(user_id: int, current: str, new: str, confirm: str) -> str:
     if new == current:
         return "Password baru harus berbeda dari password saat ini."
     users_db.update_password(user["id"], security.hash_password(new), must_change=False)
+    audit_log.log("password_ganti")
     return ""

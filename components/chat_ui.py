@@ -2,6 +2,7 @@ import html
 import re
 
 import streamlit as st
+from auth import audit_log
 
 from components.nav import go_to_patient_data
 from components.voice_input import render_voice_button
@@ -207,6 +208,10 @@ def send_user_message(text: str, question: str = None):
     st.session_state.pending_input = msg["content"]
     st.session_state.quick_actions = []
     _persist()
+    audit_log.log(
+        "ai_tanya", (st.session_state.get("active_patient") or {}).get("mrn"),
+        "permintaan kesimpulan" if text.startswith(CONTROL_PREFIX) else f"{len(text)} karakter",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +223,7 @@ def _approve_last(patient: dict):
     info = approve_anamnesis(patient["mrn"], msg["content"], msg.get("codes") or [])
     msg["approved"] = True
     msg["approval"] = info
+    audit_log.log("ai_setuju", patient["mrn"], f"{info.get('saved', 0)} temuan SNOMED tersimpan")
     st.session_state.quick_actions = []
     _persist()
 
@@ -226,6 +232,7 @@ def _reject_last():
     """Dokter menyatakan tidak akurat: tandai, lalu minta AI membuat kesimpulan baru."""
     msg = st.session_state.messages[-1]
     msg["approved"] = False
+    audit_log.log("ai_tolak", (st.session_state.get("active_patient") or {}).get("mrn"))
     send_user_message(REGENERATE_REQUEST_TEXT)
 
 
@@ -287,8 +294,10 @@ def _process_pending(slot):
 
         st.session_state.messages.append(msg)
         st.session_state.quick_actions = result["quick_actions"]
+        audit_log.log("ai_jawab", patient["mrn"], "kesimpulan" if msg.get("final") else "pertanyaan lanjutan")
     else:
         st.session_state.last_error = error or "Respons AI kosong. Silakan coba lagi."
+        audit_log.log("ai_error", patient["mrn"], (error or "respons kosong")[:120])
         st.session_state.quick_actions = list(DEFAULT_QUICK_ACTIONS)
 
     _persist()

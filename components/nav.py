@@ -1,4 +1,5 @@
 import streamlit as st
+from auth import audit_log
 
 from database import get_all_consultations, get_patient, save_or_update_consultation
 from modules.ai_agent import DEFAULT_QUICK_ACTIONS
@@ -23,6 +24,7 @@ def open_consultation(pat: dict):
     st.session_state.quick_actions = pat.get("quick_actions", [])
     st.session_state.pending_input = None
     st.session_state.view = "chat"
+    audit_log.log_once("roomchat_buka", pat.get("mrn"))
 
 
 def open_roomchat_for_mrn(mrn: str):

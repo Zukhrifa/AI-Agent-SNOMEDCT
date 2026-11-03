@@ -29,6 +29,8 @@ def refresh_user() -> None:
 
 
 def logout() -> None:
+    from auth import audit_log
+    audit_log.log("logout")  # catat sebelum sesi dibersihkan
     st.session_state.clear()  # bersihkan juga data pasien/chat dari sesi ini
 
 

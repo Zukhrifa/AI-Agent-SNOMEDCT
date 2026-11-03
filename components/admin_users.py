@@ -1,7 +1,7 @@
 """Halaman admin: buat akun, lalu kelola semua akun dari satu tabel
 (lihat password sementara, reset password, aktifkan/nonaktifkan)."""
 import streamlit as st
-from auth import service
+from auth import audit_log, service
 from auth.session import close_account_page, require_admin
 _dialog = getattr(st, "dialog", None) or st.experimental_dialog  # st.dialog butuh Streamlit >= 1.37
 _W = [2.3, 1.1, 1.7, 2.1, 1.8, 0.7, 0.7]
@@ -51,10 +51,11 @@ def render_admin_users_page() -> None:
     st.subheader("Daftar akun")
     st.caption("🔑 Reset password · ⛔/✅ Nonaktifkan/Aktifkan. Password sementara hilang otomatis "
                "setelah pengguna berhasil login.")
+    accounts = service.list_accounts(admin["id"])
     cols = st.columns(_W)
     for c, title in zip(cols, _HEAD):
         c.markdown(f"**{title}**")
-    for a in service.list_accounts(admin["id"]):
+    for a in accounts:
         me = a["id"] == admin["id"]
         c = st.columns(_W)
         c[0].markdown(f"**{a['full_name']}**{' (Anda)' if me else ''}  \n@{a['username']}")
@@ -70,3 +71,16 @@ def render_admin_users_page() -> None:
         if c[6].button("⛔" if a["is_active"] else "✅", key=f"act_{a['id']}", disabled=me,
                        help="Nonaktifkan akun" if a["is_active"] else "Aktifkan akun"):
             _confirm(admin["id"], a, "toggle")
+    st.subheader("Log aktivitas")
+    f1, f2 = st.columns([3, 1])
+    who = f1.selectbox(
+        "Pengguna", [None] + [a["id"] for a in accounts], key="log_user",
+        format_func=lambda i: "Semua pengguna" if i is None else
+        next(f"{a['full_name']} (@{a['username']})" for a in accounts if a["id"] == i),
+    )
+    limit = f2.selectbox("Tampilkan", [50, 100, 300], index=1, key="log_limit")
+    logs = audit_log.list_logs(user_id=who, limit=limit)
+    if logs:
+        st.dataframe(audit_log.table_rows(logs), use_container_width=True, hide_index=True)
+    else:
+        st.info("Belum ada aktivitas tercatat.")

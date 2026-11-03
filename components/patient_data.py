@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 import streamlit as st
+from auth import audit_log
 
 from components.nav import go_to_chat, open_roomchat_for_mrn
 from database import (
@@ -76,6 +77,7 @@ def _tab_identity(mrn: str, patient: dict):
         dob = "" if dob_unknown else dob_value.isoformat()
         update_patient_name(mrn, name.strip())
         update_patient(mrn, birth_date=dob, sex=sex)
+        audit_log.log("identitas_ubah", mrn, "identitas pasien")
 
         active = st.session_state.get("active_patient")
         if active and active.get("mrn") == mrn:
@@ -125,8 +127,9 @@ def _tab_chief_complaint(mrn: str, patient: dict):
             col_text, col_del = st.columns([11, 1])
             col_text.markdown(f"• **{item['term']}** `{item['conceptId']}`")
             if col_del.button("🗑", key=f"kc_del_{mrn}_{i}", help="Hapus"):
-                current.pop(i)
+                gone = current.pop(i)
                 update_patient(mrn, chief_complaints=current)
+                audit_log.log("keluhan_hapus", mrn, f"{gone['term']} {gone['conceptId']}")
                 st.rerun()
     else:
         st.info("Belum ada keluhan utama.")
@@ -160,6 +163,7 @@ def _tab_chief_complaint(mrn: str, patient: dict):
             if chosen["conceptId"] not in {c["conceptId"] for c in current}:
                 current.append({"conceptId": chosen["conceptId"], "term": chosen["term"]})
                 update_patient(mrn, chief_complaints=current)
+                audit_log.log("keluhan_tambah", mrn, f"{chosen['term']} {chosen['conceptId']}")
             st.rerun()
     else:
         st.warning("Tidak ada hasil. Coba kata kunci lain.")
@@ -192,6 +196,7 @@ def _tab_anamnesis(mrn: str, patient: dict):
             "rps": rps.strip(), "rpd": rpd.strip(), "rpk": rpk.strip(),
             "obat": obat.strip(), "alergi": alergi.strip(), "kebiasaan": kebiasaan.strip(),
         })
+        audit_log.log("anamnesis_ubah", mrn)
         st.success("Anamnesis tersimpan.")
 
 
@@ -237,6 +242,7 @@ def _tab_physical(mrn: str, patient: dict):
             "suhu": suhu, "spo2": spo2, "bb": bb, "tb": tb,
             "pe_jantung": pe_jantung.strip(), "pe_paru": pe_paru.strip(), "pe_lain": pe_lain.strip(),
         })
+        audit_log.log("fisik_ubah", mrn, "tanda vital & pemeriksaan fisik")
         if bb and tb:
             st.success(f"Tersimpan. IMT: {bb / ((tb / 100) ** 2):.1f}")
         else:
@@ -261,6 +267,7 @@ def _tab_supporting(mrn: str):
             st.warning("Isi hasil pemeriksaan terlebih dahulu.")
         else:
             add_supporting(mrn, category, content.strip(), recorded.isoformat())
+            audit_log.log("penunjang_tambah", mrn, category)
             st.rerun()
 
     items = list_supporting(mrn)
@@ -272,6 +279,7 @@ def _tab_supporting(mrn: str):
             st.write(item["content"])
             if st.button("🗑 Hapus", key=f"pj_del_{item['id']}"):
                 delete_supporting(item["id"])
+                audit_log.log("penunjang_hapus", mrn, item["category"])
                 st.rerun()
 
 
@@ -286,8 +294,9 @@ def _tab_results(mrn: str, patient: dict):
             kategori = CATEGORY_NAMES.get(item.get("kategori", ""), "")
             col_text.markdown(f"• {kategori}: **{item['term']}** `{item['conceptId']}`")
             if col_del.button("🗑", key=f"cf_del_{mrn}_{i}", help="Hapus temuan"):
-                findings.pop(i)
+                gone = findings.pop(i)
                 update_patient(mrn, confirmed_findings=findings)
+                audit_log.log("temuan_hapus", mrn, f"{gone['term']} {gone['conceptId']}")
                 st.rerun()
     else:
         st.info("Belum ada temuan terkonfirmasi.")
@@ -335,6 +344,7 @@ def render_patient_data_page():
                 st.error(f"MRN {m} sudah dipakai oleh {names[m]}.")
             else:
                 ensure_patient(m, n)
+                audit_log.log("pasien_buat", m)
                 st.session_state.data_mrn = m
                 st.session_state.pop("data_patient_select", None)
                 st.rerun()
@@ -355,6 +365,7 @@ def render_patient_data_page():
     if not patient:
         st.error("Data pasien tidak ditemukan.")
         return
+    audit_log.log_once("pasien_lihat", mrn)
 
     age = calc_age(patient.get("birth_date"))
     info = f"MRN: {mrn}"
@@ -378,7 +389,7 @@ def render_patient_data_page():
 
     tabs = st.tabs([
         "Identitas", "Keluhan Utama (SNOMED)", "Anamnesis",
-        "Pemeriksaan Fisik", "Data Penunjang", "Hasil Anamnesis AI",
+        "Pemeriksaan Fisik", "Data Penunjang", "Hasil Anamnesis AI", "Riwayat Aktivitas",
     ])
     with tabs[0]:
         _tab_identity(mrn, patient)
@@ -392,3 +403,10 @@ def render_patient_data_page():
         _tab_supporting(mrn)
     with tabs[5]:
         _tab_results(mrn, patient)
+    with tabs[6]:
+        st.caption("Riwayat aktivitas pengguna pada pasien ini (100 terbaru).")
+        logs = audit_log.list_logs(mrn=mrn, limit=100)
+        if logs:
+            st.dataframe(audit_log.table_rows(logs, with_mrn=False), use_container_width=True, hide_index=True)
+        else:
+            st.info("Belum ada aktivitas tercatat.")

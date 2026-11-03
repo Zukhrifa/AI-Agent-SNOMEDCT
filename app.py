@@ -1,6 +1,8 @@
 import random
 
 import streamlit as st
+from auth import audit_log
+from components.context_panel import render_context_panel
 from components.user_box import render_account_page   # taruh bersama import lainnya
 from components.chat_ui import render_chat_room, send_user_message
 from components.nav import go_to_patient_data, open_consultation
@@ -106,6 +108,8 @@ def render_new_consultation_form():
         return
 
     ensure_patient(mrn, name)
+    if selected == NEW_PATIENT:
+        audit_log.log("pasien_buat", mrn)
     existing = consult_by_mrn.get(mrn)
 
     if existing and not fresh:
@@ -122,6 +126,7 @@ def render_new_consultation_form():
         quick_actions = list(DEFAULT_QUICK_ACTIONS)
 
         save_or_update_consultation(name, mrn, first_messages, quick_actions)
+        audit_log.log("roomchat_mulai", mrn, "sesi baru" if existing else "")
         open_consultation({
             "name": name,
             "mrn": mrn,
@@ -160,6 +165,7 @@ def render_roomchat_view():
             if st.button("Simpan Nama", use_container_width=True):
                 if new_name.strip():
                     update_patient_name(active["mrn"], new_name.strip())
+                    audit_log.log("identitas_ubah", active["mrn"], "nama diubah")
                     st.session_state.active_patient["name"] = new_name.strip()
                     st.session_state.patient_list = get_all_consultations()
                     st.rerun()
@@ -176,6 +182,7 @@ def render_roomchat_view():
                 save_or_update_consultation(
                     active["name"], active["mrn"], [], st.session_state.quick_actions
                 )
+                audit_log.log("chat_clear", active["mrn"])
                 st.session_state.patient_list = get_all_consultations()
                 st.rerun()
 
@@ -184,6 +191,7 @@ def render_roomchat_view():
             # Hapus roomchat (data pasien & hasil anamnesis tetap tersimpan)
             if st.button("🗑 Hapus Sesi", type="primary", use_container_width=True):
                 delete_consultation(active["mrn"])
+                audit_log.log("sesi_hapus", active["mrn"])
                 st.session_state.active_patient = None
                 st.session_state.messages = []
                 st.session_state.quick_actions = []
@@ -192,6 +200,7 @@ def render_roomchat_view():
                 st.rerun()
             st.caption("Menghapus sesi hanya menghapus chat. Data pasien tetap tersimpan.")
 
+    render_context_panel(active["mrn"])
     render_chat_room()
 
 
