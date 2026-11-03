@@ -40,6 +40,14 @@ if "pending_input" not in st.session_state:
     st.session_state.pending_input = None
 if "view" not in st.session_state:
     st.session_state.view = "chat"
+_restore_mrn = st.session_state.pop("_restore_mrn", None)  # roomchat terakhir sebelum refresh
+if _restore_mrn and st.session_state.active_patient is None:
+    for _c in st.session_state.patient_list:
+        if _c["mrn"] == _restore_mrn:
+            st.session_state.active_patient = _c
+            st.session_state.messages = _c.get("messages", [])
+            st.session_state.quick_actions = _c.get("quick_actions", [])
+            break
 if "new_mrn_default" not in st.session_state:
     st.session_state.new_mrn_default = f"MRN-{random.randint(10000, 99999)}"
 

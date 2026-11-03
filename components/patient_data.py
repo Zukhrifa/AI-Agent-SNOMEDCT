@@ -323,6 +323,14 @@ def _tab_results(mrn: str, patient: dict):
 # ---------------------------------------------------------------------------
 # Halaman
 # ---------------------------------------------------------------------------
+def _tab_logs(mrn: str):
+    """Fragment: riwayat aktivitas pasien, diperbarui otomatis."""
+    st.caption(f"Riwayat aktivitas pengguna pada pasien ini (100 terbaru). Diperbarui otomatis tiap {audit_log.LIVE_SECONDS} detik.")
+    logs = audit_log.list_logs(mrn=mrn, limit=100)
+    if logs:
+        st.dataframe(audit_log.table_rows(logs, with_mrn=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("Belum ada aktivitas tercatat.")
 def render_patient_data_page():
     st.title("🗂 Data Pasien")
     st.caption("Data tersimpan per MRN dan otomatis dipakai AI di roomchat pasien yang sama.")
@@ -404,9 +412,4 @@ def render_patient_data_page():
     with tabs[5]:
         _tab_results(mrn, patient)
     with tabs[6]:
-        st.caption("Riwayat aktivitas pengguna pada pasien ini (100 terbaru).")
-        logs = audit_log.list_logs(mrn=mrn, limit=100)
-        if logs:
-            st.dataframe(audit_log.table_rows(logs, with_mrn=False), use_container_width=True, hide_index=True)
-        else:
-            st.info("Belum ada aktivitas tercatat.")
+        audit_log.live(_tab_logs)(mrn)

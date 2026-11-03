@@ -29,6 +29,19 @@ def _confirm(admin_id: int, target: dict, action: str) -> None:
             st.error(error)
         else:
             st.rerun()
+def _log_view(accounts: list) -> None:
+    """Fragment: filter dan tabel log, diperbarui otomatis tanpa memuat ulang halaman."""
+    f1, f2 = st.columns([3, 1])
+    names = {a["id"]: f"{a['full_name']} (@{a['username']})" for a in accounts}
+    who = f1.selectbox("Pengguna", [None] + list(names), key="log_user",
+                       format_func=lambda i: "Semua pengguna" if i is None else names[i])
+    limit = f2.selectbox("Tampilkan", [50, 100, 300], index=1, key="log_limit")
+    logs = audit_log.list_logs(user_id=who, limit=limit)
+    if logs:
+        st.dataframe(audit_log.table_rows(logs), use_container_width=True, hide_index=True)
+    else:
+        st.info("Belum ada aktivitas tercatat.")
+    st.caption(f"Diperbarui otomatis tiap {audit_log.LIVE_SECONDS} detik.")
 def render_admin_users_page() -> None:
     admin = require_admin()
     if st.button("← Kembali", key="admin_back"):
@@ -72,15 +85,4 @@ def render_admin_users_page() -> None:
                        help="Nonaktifkan akun" if a["is_active"] else "Aktifkan akun"):
             _confirm(admin["id"], a, "toggle")
     st.subheader("Log aktivitas")
-    f1, f2 = st.columns([3, 1])
-    who = f1.selectbox(
-        "Pengguna", [None] + [a["id"] for a in accounts], key="log_user",
-        format_func=lambda i: "Semua pengguna" if i is None else
-        next(f"{a['full_name']} (@{a['username']})" for a in accounts if a["id"] == i),
-    )
-    limit = f2.selectbox("Tampilkan", [50, 100, 300], index=1, key="log_limit")
-    logs = audit_log.list_logs(user_id=who, limit=limit)
-    if logs:
-        st.dataframe(audit_log.table_rows(logs), use_container_width=True, hide_index=True)
-    else:
-        st.info("Belum ada aktivitas tercatat.")
+    audit_log.live(_log_view)(accounts)

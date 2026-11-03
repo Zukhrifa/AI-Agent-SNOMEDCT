@@ -1,6 +1,7 @@
 """Akses tabel `users` di Turso (atau SQLite lokal), memakai lapisan akses dari database.py.
 Kolom `temp_password_enc` kini menyimpan password sementara APA ADANYA (teks asli),
 dihapus saat pengguna berhasil login atau mengganti password."""
+import time
 from database import _NOW, _run, _write
 _COLS = (
     "id", "username", "full_name", "role", "password_hash", "temp_password_enc", "is_active",
@@ -32,6 +33,16 @@ def init_table() -> None:
         _run([("SELECT temp_password_enc FROM users LIMIT 1", ())])
     except Exception:
         _write([("ALTER TABLE users ADD COLUMN temp_password_enc TEXT", ())])
+    _write([(
+        f"""CREATE TABLE IF NOT EXISTS auth_sessions (
+            token_hash TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            state TEXT NOT NULL DEFAULT '',
+            expires_at INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT ({_NOW})
+        )""",
+        (),
+    )])
 def count_users() -> int:
     return int(_run([("SELECT COUNT(*) FROM users", ())])[0][0][0])
 # Pembacaan memakai _run (bukan _query) agar tidak terkena cache: status akun harus selalu terbaru.
@@ -83,3 +94,19 @@ def record_login(user_id: int) -> None:
         f"last_login_at = {_NOW} WHERE id = ?",
         (int(user_id),),
     )])
+# --- Sesi login (tahan refresh browser): hanya hash token yang disimpan ---
+def create_session(token_hash: str, user_id: int, expires_at: int) -> None:
+    _write([
+        ("DELETE FROM auth_sessions WHERE expires_at < ?", (int(time.time()),)),
+        ("INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+         (token_hash, int(user_id), int(expires_at))),
+    ])
+def get_session(token_hash: str):
+    rows = _run([("SELECT user_id, state, expires_at FROM auth_sessions WHERE token_hash = ?", (token_hash,))])[0]
+    return dict(zip(("user_id", "state", "expires_at"), rows[0])) if rows else None
+def save_session_state(token_hash: str, state: str) -> None:
+    _write([("UPDATE auth_sessions SET state = ? WHERE token_hash = ?", (state, token_hash))])
+def delete_session(token_hash: str) -> None:
+    _write([("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))])
+def delete_user_sessions(user_id: int) -> None:
+    _write([("DELETE FROM auth_sessions WHERE user_id = ?", (int(user_id),))])

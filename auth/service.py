@@ -144,6 +144,7 @@ def reset_password(actor_id: int, target_id: int) -> str:
         return "Untuk akun sendiri, ganti password lewat menu Profil."
     plain = security.generate_temp_password()
     users_db.set_temp_password(target_id, security.hash_password(plain), plain)
+    users_db.delete_user_sessions(target_id)  # paksa login ulang di semua perangkat
     audit_log.log("akun_reset", detail=f"@{target['username']}")
     return ""
 def set_active(actor_id: int, target_id: int, active: bool) -> str:
@@ -156,6 +157,8 @@ def set_active(actor_id: int, target_id: int, active: bool) -> str:
     if not target:
         return "Akun tidak ditemukan."
     users_db.set_active(target_id, active)
+    if not active:
+        users_db.delete_user_sessions(target_id)
     audit_log.log("akun_aktif" if active else "akun_nonaktif", detail=f"@{target['username']}")
     return ""
 def change_password(user_id: int, current: str, new: str, confirm: str) -> str:

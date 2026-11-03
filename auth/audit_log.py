@@ -2,7 +2,9 @@
 Satu tabel pusat `activity_logs`; ditampilkan di Kelola Akun, Data Pasien, dan panel roomchat.
 Isi pesan/data klinis TIDAK disimpan di log, hanya jenis aktivitas dan ringkasan singkat."""
 import streamlit as st
-from database import _query, _write
+from database import _run, _write
+
+LIVE_SECONDS = 10  # jeda pembaruan otomatis tampilan log
 
 ACTIONS = {
     "login": "Login", "login_gagal": "Login gagal", "logout": "Logout",
@@ -59,7 +61,7 @@ def list_logs(mrn: str = None, user_id: int = None, limit: int = 100) -> list:
         where.append("user_id = ?"); params.append(int(user_id))
     sql = ("SELECT " + ", ".join(_COLS) + " FROM activity_logs"
            + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?")
-    return [dict(zip(_COLS, r)) for r in _query(sql, (*params, int(limit)))]
+    return [dict(zip(_COLS, r)) for r in _run([(sql, (*params, int(limit)))])[0]]  # tanpa cache: selalu terbaru
 def table_rows(logs: list, with_mrn: bool = True) -> list:
     """Baris siap tampil untuk st.dataframe."""
     rows = []
@@ -74,3 +76,8 @@ def table_rows(logs: list, with_mrn: bool = True) -> list:
         row["Detail"] = l["detail"] or "-"
         rows.append(row)
     return rows
+def live(fn, every=LIVE_SECONDS):
+    """Jadikan fungsi tampilan sebagai fragment yang menyegarkan dirinya sendiri (tanpa rerun seluruh
+    halaman). `every=None` mematikan pembaruan otomatis. Streamlit lama tanpa st.fragment: fungsi biasa."""
+    frag = getattr(st, "fragment", None)
+    return frag(fn, run_every=every) if frag else fn
