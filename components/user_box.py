@@ -1,12 +1,13 @@
-"""Menu akun di bawah sidebar (gaya Claude): chip nama/peran yang membuka menu Profil, Kelola akun, Keluar."""
+"""Menu akun di bawah sidebar (gaya Claude): chip nama/peran yang membuka menu Profil, Kelola akun, Dokumen pedoman (admin), Keluar."""
 import streamlit as st
 
 from auth.service import ROLE_LABEL
 from auth.session import current_account_page, current_user, logout, open_account_page
 from components.admin_profile import render_profile_page
+from components.admin_docs import render_admin_docs_page
 from components.admin_users import render_admin_users_page
 
-_PAGES = {"profile": render_profile_page, "admin": render_admin_users_page}
+_PAGES = {"profile": render_profile_page, "admin": render_admin_users_page, "docs": render_admin_docs_page}
 
 # Ikon Material butuh Streamlit >= 1.37; versi lebih lama memakai emoji.
 _MATERIAL = tuple(int(p) for p in st.__version__.split(".")[:2] if p.isdigit()) >= (1, 37)
@@ -14,6 +15,7 @@ _ICON = {
     "user": ":material/account_circle:" if _MATERIAL else "👤",
     "profile": ":material/person:" if _MATERIAL else "👤",
     "admin": ":material/manage_accounts:" if _MATERIAL else "⚙️",
+    "docs": ":material/description:" if _MATERIAL else "📄",
     "logout": ":material/logout:" if _MATERIAL else "🚪",
 }
 
@@ -62,6 +64,9 @@ def render_user_box() -> None:
                 st.rerun()
             if user["role"] == "admin" and _item("Kelola akun", "admin", "menu_admin"):
                 open_account_page("admin")
+                st.rerun()
+            if user["role"] == "admin" and _item("Dokumen pedoman", "docs", "menu_docs"):
+                open_account_page("docs")
                 st.rerun()
             st.divider()
             if _item("Keluar", "logout", "menu_logout"):

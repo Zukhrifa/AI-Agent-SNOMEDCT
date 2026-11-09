@@ -1,12 +1,26 @@
 import html
+import json
 import re
+import time
 
 import streamlit as st
 from auth import audit_log
 
 from components.nav import go_to_patient_data
 from components.voice_input import render_voice_button
-from database import approve_anamnesis, get_all_consultations, save_or_update_consultation
+from database import (
+    approve_anamnesis,
+    get_all_consultations,
+    get_patient,
+    list_supporting,
+    save_or_update_consultation,
+)
+from modules.agent_tools import (
+    CHECKLIST_LABELS,
+    checklist_status,
+    compute_red_flags,
+    conversation_texts,
+)
 from modules.ai_agent import (
     CONTROL_PREFIX,
     DEFAULT_QUICK_ACTIONS,
@@ -15,9 +29,8 @@ from modules.ai_agent import (
     friendly_error,
     get_candidates,
     parse_response,
-    stream_anamnesis_response,
+    run_agent,
     strip_data_block,
-    visible_part,
 )
 from modules.patient_context import build_patient_context
 
@@ -175,7 +188,7 @@ def _question_bubble(text: str) -> str:
 
 
 def _persist():
-    """Simpan percakapan aktif ke SQLite dan segarkan daftar roomchat."""
+    """Simpan percakapan aktif ke database dan segarkan daftar roomchat."""
     patient = st.session_state.get("active_patient")
     if not patient:
         return
@@ -212,6 +225,81 @@ def send_user_message(text: str, question: str = None):
         "ai_tanya", (st.session_state.get("active_patient") or {}).get("mrn"),
         "permintaan kesimpulan" if text.startswith(CONTROL_PREFIX) else f"{len(text)} karakter",
     )
+
+
+# ---------------------------------------------------------------------------
+# Status agent di UI (dihitung kode, tanpa menunggu AI)
+# ---------------------------------------------------------------------------
+def _agent_mode_toggle() -> bool:
+    """Saklar di sidebar: aktif = AI boleh memakai tool; nonaktif = mode cepat (1 panggilan AI per pesan)."""
+    widget = getattr(st.sidebar, "toggle", None) or st.sidebar.checkbox
+    value = widget(
+        "⚡ Mode agent (tool)",
+        value=st.session_state.get("agent_pref", True),
+        key="agent_toggle",
+        help=(
+            "Aktif: AI boleh memakai tool (skor HEART, cek tanda bahaya, dll.) bila perlu. "
+            "Nonaktif: mode cepat, selalu 1 panggilan AI per pesan."
+        ),
+    )
+    st.session_state.agent_pref = bool(value)
+    return bool(value)
+
+
+def _agent_snapshot(mrn: str, messages: list):
+    patient_record = get_patient(mrn)
+    flags = compute_red_flags(patient_record, conversation_texts(messages), list_supporting(mrn))
+    status = checklist_status(messages, patient_record)
+    return flags, status
+
+
+def _render_red_flags(flags: list):
+    if not flags:
+        return
+    lines = "\n".join(
+        f"- {'🔴' if f['level'] == 'critical' else '🟠'} {f['message']}" for f in flags
+    )
+    box = st.error if any(f["level"] == "critical" for f in flags) else st.warning
+    box(f"**Tanda bahaya terdeteksi** (aturan sistem, bukan diagnosis):\n\n{lines}")
+
+
+def _render_progress(status: dict):
+    text = f"Kelengkapan anamnesis: {status['done']}/{status['total']}"
+    value = status["done"] / max(status["total"], 1)
+    try:
+        st.progress(value, text=text)
+    except TypeError:
+        st.progress(value)
+        st.caption(text)
+    if status["missing"]:
+        st.caption("Belum digali: " + ", ".join(CHECKLIST_LABELS[k] for k in status["missing"]))
+
+
+def _render_meta(msg: dict):
+    """Waktu respons, jejak tool, dan sumber pedoman (transparansi agent) di bawah bubble AI."""
+    steps = msg.get("agent_steps") or []
+    elapsed = msg.get("elapsed_s")
+    if elapsed is not None:
+        extra = f" • {len(steps)} tool" if steps else ""
+        st.caption(f"⏱ {elapsed:.1f} dtk{extra}")
+    if steps:
+        with st.expander(f"🔧 Langkah agent ({len(steps)} tool)"):
+            for step in steps:
+                args = json.dumps(step.get("args") or {}, ensure_ascii=False)
+                st.markdown(f"- **{step.get('tool')}** `{args}` → {step.get('summary', '')} ({step.get('ms', 0)} ms)")
+    sources, seen = [], set()
+    for step in steps:
+        for src in step.get("sources") or []:
+            key = (src.get("dokumen"), src.get("halaman"), src.get("bagian"))
+            if key not in seen:
+                seen.add(key)
+                sources.append(src)
+    if sources:
+        with st.expander(f"📄 Sumber pedoman ({len(sources)})"):
+            for src in sources:
+                page = f", hal. {src['halaman']}" if src.get("halaman") else ""
+                section = f" ({src['bagian']})" if src.get("bagian") else ""
+                st.markdown(f"- **{src.get('dokumen')}**{page}{section}")
 
 
 # ---------------------------------------------------------------------------
@@ -261,19 +349,30 @@ def _process_pending(slot):
     patient = st.session_state.active_patient
     history = st.session_state.messages[:-1]
     patient_context = build_patient_context(patient["mrn"])
+    use_tools = bool(st.session_state.get("agent_pref", True))
 
     slot.markdown(_ai_bubble("⏳ Menganalisis jawaban pasien...", loading=True), unsafe_allow_html=True)
 
-    raw = ""
-    error = None
+    raw, steps, error, last_text = "", [], None, ""
+    started = time.perf_counter()
     try:
-        for chunk in stream_anamnesis_response(pending, history, patient_context):
-            raw += chunk
-            visible = visible_part(raw).strip()
-            if visible:
-                slot.markdown(_ai_bubble(visible), unsafe_allow_html=True)
+        for event in run_agent(pending, history, patient_context, mrn=patient["mrn"], use_tools=use_tools):
+            kind = event["type"]
+            if kind == "text":
+                visible = event["text"].strip()
+                if visible:
+                    last_text = visible
+                    slot.markdown(_ai_bubble(visible), unsafe_allow_html=True)
+            elif kind == "tool":
+                slot.markdown(_ai_bubble(event["label"], loading=True), unsafe_allow_html=True)
+            elif kind == "final":
+                raw = event["raw"]
+                steps = event.get("steps", [])
     except Exception as e:
         error = friendly_error(e)
+        if not raw and last_text:
+            raw = last_text  # pertahankan jawaban parsial yang sudah tampil
+    elapsed = time.perf_counter() - started
 
     st.session_state.pending_input = None
 
@@ -285,7 +384,11 @@ def _process_pending(slot):
         )
         text = result["text"] or "Maaf, respons AI kosong. Silakan kirim ulang pesan Anda."
 
-        msg = {"role": "assistant", "content": text}
+        msg = {"role": "assistant", "content": text, "elapsed_s": round(elapsed, 1)}
+        if result.get("covered"):
+            msg["covered"] = result["covered"]
+        if steps:
+            msg["agent_steps"] = steps
         if result["status"] == "final":
             # Belum disimpan ke Data Pasien: menunggu persetujuan dokter
             msg["final"] = True
@@ -313,6 +416,7 @@ def render_chat_room():
     # Tombol mikrofon di dalam kotak pesan (di samping tombol kirim).
     # Dipanggil paling awal agar posisinya di halaman stabil antar-rerun.
     render_voice_button()
+    _agent_mode_toggle()
 
     pending = st.session_state.get("pending_input")
 
@@ -354,6 +458,7 @@ def render_chat_room():
                 ),
                 unsafe_allow_html=True,
             )
+            _render_meta(msg)
 
     # Tempat jawaban AI yang sedang di-stream
     stream_slot = st.empty()
@@ -361,6 +466,12 @@ def render_chat_room():
     error = st.session_state.pop("last_error", None)
     if error:
         st.error(error)
+
+    # Status agent: tanda bahaya & kelengkapan anamnesis (dihitung kode, langsung tampil)
+    if has_user_msg:
+        flags, status = _agent_snapshot(patient["mrn"], messages)
+        _render_red_flags(flags)
+        _render_progress(status)
 
     if not pending:
         if last_final and last_approved is None:

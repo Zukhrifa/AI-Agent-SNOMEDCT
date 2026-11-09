@@ -7,6 +7,20 @@ import streamlit as st
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from database import get_patient, list_supporting
+from modules.agent_tools import (
+    CONTROL_PREFIX,
+    checklist_status,
+    clean_covered,
+    compute_red_flags,
+    conversation_texts,
+    execute_tool_calls,
+    format_agent_state,
+    format_tool_results,
+    sources_of,
+    tool_label,
+    tools_prompt,
+)
 from modules.rag_snomed import search_candidates, search_terms
 load_dotenv()
 # --- Konfigurasi (bisa diubah lewat .env) ---
@@ -16,6 +30,9 @@ THINKING_BUDGET = os.getenv("GEMINI_THINKING_BUDGET", "0").strip()
 THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "").strip()
 MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "900"))
 REQUEST_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "15"))
+# Agent: jumlah langkah tool tambahan per pesan. 0 = mode cepat (selalu 1 panggilan AI per pesan).
+AGENT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "2"))
+MAX_TOOL_CALLS = 3            # jumlah tool maksimal dalam satu langkah
 MAX_HISTORY_MESSAGES = 10
 RETRIEVAL_MESSAGES = 3        # jumlah jawaban terakhir yang dipakai mencari istilah referensi
 SNOMED_K_PER_QUERY = 3
@@ -26,7 +43,6 @@ DELIMITER = "===DATA==="
 DELIMITER_RE = re.compile(r"={2,}\s*DATA\s*=*", re.IGNORECASE)
 STATUS_JSON_RE = re.compile(r'\{\s*"status"')
 PARTIAL_DELIMITER_RE = re.compile(r"=+\s*(?:D|DA|DAT)?$", re.IGNORECASE)
-CONTROL_PREFIX = "Permintaan dokter:"
 FINAL_REQUEST_TEXT = (
     f"{CONTROL_PREFIX} mohon berikan kesimpulan dugaan diagnosis beserta kode SNOMED CT yang ada di chromadb dan harus akurat, bukan angka asal "
     "berdasarkan informasi yang sudah terkumpul."
@@ -43,36 +59,53 @@ DEFAULT_QUICK_ACTIONS = [
     "Kapan pertama kali keluhan ini dirasakan?",
     "Apakah ada riwayat penyakit jantung sebelumnya?",
 ]
-SYSTEM_TEMPLATE = """Anda adalah asisten klinis (AI agent) untuk dokter/staf medis kardiologi dalam proses anamnesis, berbahasa Indonesia. Anda mendukung keputusan klinis, bukan pengganti dokter.
+SYSTEM_TEMPLATE = """Anda adalah AI agent klinis untuk dokter/staf medis kardiologi dalam proses anamnesis, berbahasa Indonesia. Anda mendukung keputusan klinis, bukan pengganti dokter. Tujuan Anda: menyelesaikan anamnesis dengan cepat dan lengkap, mengenali tanda bahaya, lalu menyusun dugaan diagnosis beserta temuan SNOMED CT untuk disetujui dokter.
+
 SUMBER FAKTA:
 - Pesan dari staf medis berformat "Pertanyaan dokter: ... / Jawaban pasien: ..." atau catatan bebas.
 - Yang dianggap fakta: isi "Jawaban pasien", catatan bebas, dan DATA PASIEN TERSIMPAN di bawah. "Pertanyaan dokter" BUKAN fakta. Jangan menyimpulkan gejala dari pertanyaan saja.
 - Jangan menanyakan ulang informasi yang sudah ada di DATA PASIEN TERSIMPAN. Gunakan tanda vital, pemeriksaan fisik, dan data penunjang (bila ada) untuk menilai kemungkinan diagnosis.
 - Jawaban negatif/ambigu ("tidak", "belum tahu") dicatat apa adanya. Jangan mengarang informasi.
+
 DATA PASIEN TERSIMPAN:
 {{DATA_PASIEN}}
+
+STATUS AGENT (dihitung sistem, andalkan ini):
+{{STATUS_AGENT}}
+{{TOOLS_BLOCK}}
 ALUR:
-A. Jika informasi belum cukup -> status "ask": tanggapi jawaban terakhir (maksimal 3 kalimat), lalu beri 3 pertanyaan lanjutan BARU yang singkat tentang topik yang belum digali (karakteristik nyeri, penjalaran, durasi, pemicu/peredam, gejala penyerta, riwayat penyakit, obat, faktor risiko: merokok, hipertensi, diabetes, kolesterol, riwayat keluarga).
-B. Status "final" jika (1) minimal 4 jawaban pasien yang konkret (atau data tersimpan yang setara) sudah terkumpul dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan. Tulis kesimpulan ringkas dengan struktur:
+A. Jika informasi belum cukup -> status "ask": tanggapi jawaban terakhir (maksimal 3 kalimat), lalu beri 3 pertanyaan lanjutan BARU yang singkat tentang item yang BELUM digali pada checklist. Jika ada tanda bahaya KRITIS, sebutkan di awal tanggapan dan sarankan evaluasi segera, lalu tetap gali informasi yang paling menentukan.
+B. Status "final" jika (1) item inti checklist (onset, quality, radiation, duration, associated, risk_factors) sudah terisi dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan, atau (3) ada tanda bahaya kritis dan data sudah cukup untuk dugaan awal. Tulis kesimpulan ringkas dengan struktur:
 Ringkasan gejala: ...
 Dugaan diagnosis (urut dari paling mungkin, maksimal 3): ...
 Dasar: ...
 Tanda bahaya / saran pemeriksaan lanjutan: ...
 Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
 C. Jika dokter menyatakan kesimpulan sebelumnya TIDAK akurat: buat kesimpulan BARU (status "final") yang berbeda dan lebih sesuai. Tinjau ulang semua data, pertimbangkan diagnosis alternatif, perbaiki findings. Jangan mengulang kesimpulan yang sama.
+
 TEMUAN UNTUK KODE SNOMED CT:
 - Anda TIDAK menulis kode angka. Sebutkan konsep klinisnya di "findings"; sistem akan mencari kode SNOMED CT terdekat dari database.
 - Setiap temuan: "label" (istilah Indonesia), "term_en" (istilah medis Inggris baku, sependek mungkin, mis. "chest pain", "hypertension", "angina pectoris"), "kategori": "gejala" atau "faktor_risiko" atau "diagnosis".
 - Status "ask": findings harus [].
 - Status "final": WAJIB isi findings: minimal 1 gejala dan 1-3 dugaan diagnosis, ditambah faktor risiko bila ada. Walau tidak pasti, tetap tulis dugaan yang paling mendekati (di teks tandai sebagai dugaan). Jangan mengosongkan findings.
+
 Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulisan term_en; pakai bila relevan):
 {{REFERENSI}}
+
 FORMAT OUTPUT (wajib persis, tanpa teks lain):
 [teks tanggapan atau kesimpulan]
 {{DELIM}}
-{"status": "ask atau final", "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
-Pada status "final", "quick_actions" harus [].
+{"status": "ask atau final", "covered": ["onset", "quality"], "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
+Pada status "final", "quick_actions" harus []. "covered" = kunci checklist yang sudah digali (kumulatif) dari: onset, provocation, quality, radiation, severity, duration, associated, risk_factors, history, medications.
 Baris pemisah harus persis "{{DELIM}}" (tiga tanda sama dengan di kiri DAN kanan) pada baris tersendiri, tidak boleh dihilangkan atau diubah."""
+TOOLS_BLOCK_TEMPLATE = """
+TOOL (opsional, hanya bila perlu):
+{{TOOLS}}
+Aturan tool: tanda bahaya, checklist, dan data pasien SUDAH tersedia di atas, jadi jangan memanggil tool untuk hal itu. Panggil tool HANYA untuk: menghitung skor risiko (calculate_heart_score) bila datanya cukup, mencari kode untuk istilah spesifik, melihat detail data lengkap, atau mencari isi SOP/pedoman (search_guidelines). Jika dokter bertanya tentang SOP, prosedur, pemeriksaan, atau tatalaksana dan tool search_guidelines tersedia, panggil tool itu lebih dulu dan jawab HANYA berdasarkan kutipan yang dikembalikan. Tulis sumbernya di teks dengan format (Sumber: nama dokumen, hal. X). Jika tidak ada kutipan yang relevan, katakan terus terang bahwa tidak ditemukan di dokumen pedoman, dan jangan mengarang isi dokumen. Maksimal {{MAX_CALLS}} tool per langkah. Untuk memanggil tool, keluarkan HANYA (tanpa teks sebelum pemisah):
+{{DELIM}}
+{"status": "tool", "calls": [{"tool": "nama_tool", "args": {}}]}
+Sebagian besar giliran TIDAK memerlukan tool: langsung jawab (status ask atau final).
+"""
 TRANSLATE_PROMPT = """Anda penerjemah istilah medis untuk pencarian SNOMED CT.
 Ubah masukan (bahasa Indonesia atau bahasa awam lain) menjadi 1 sampai 3 istilah medis berbahasa Inggris yang baku dan sependek mungkin, bergaya SNOMED CT.
 Balas HANYA berupa array JSON berisi string, tanpa teks lain.
@@ -194,30 +227,44 @@ def codes_to_text(codes) -> str:
         return ""
     lines = [f"- {c.get('kategori', '')}: {c['term']} ({c['conceptId']})" for c in codes]
     return "\n\nKode SNOMED CT:\n" + "\n".join(lines)
-def build_system_prompt(candidates: dict, patient_context: str = "") -> str:
-    if candidates:
-        ref = "\n".join(f"- {term}" for term in candidates.values())
-    else:
-        ref = "(tidak ada)"
+def build_system_prompt(candidates: dict, patient_context: str = "", agent_state: str = "",
+                        tools_text: str = "") -> str:
+    ref = "\n".join(f"- {term}" for term in candidates.values()) if candidates else "(tidak ada)"
     data_pasien = (patient_context or "").strip() or "(belum ada data tersimpan)"
+    status_agent = (agent_state or "").strip() or "(tidak tersedia)"
+
+    tools_block = ""
+    if tools_text:
+        tools_block = (
+            TOOLS_BLOCK_TEMPLATE
+            .replace("{{TOOLS}}", tools_text)
+            .replace("{{MAX_CALLS}}", str(MAX_TOOL_CALLS))
+        )
+
     return (
         SYSTEM_TEMPLATE
+        .replace("{{TOOLS_BLOCK}}", tools_block)
         .replace("{{REFERENSI}}", ref)
         .replace("{{DELIM}}", DELIMITER)
+        .replace("{{STATUS_AGENT}}", status_agent)
         .replace("{{DATA_PASIEN}}", data_pasien)
     )
-def build_messages(user_input: str, chat_history: list, candidates: dict, patient_context: str = "") -> list:
-    messages = [SystemMessage(content=build_system_prompt(candidates, patient_context))]
+def build_messages(user_input: str, chat_history: list, candidates: dict, patient_context: str = "",
+                   agent_state: str = "", tools_text: str = "") -> list:
+    messages = [SystemMessage(content=build_system_prompt(candidates, patient_context, agent_state, tools_text))]
+
     window = list(chat_history[-MAX_HISTORY_MESSAGES:])
     # Gemini mewajibkan percakapan diawali pesan user
     while window and window[0]["role"] != "user":
         window.pop(0)
+
     for msg in window:
         if msg["role"] == "user":
             messages.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "assistant":
             content = strip_data_block(msg["content"]) + codes_to_text(msg.get("codes"))
             messages.append(AIMessage(content=content))
+
     messages.append(HumanMessage(content=user_input))
     return messages
 # ---------------------------------------------------------------------------
@@ -274,22 +321,6 @@ def _stream_llm(messages: list, max_tokens: int = MAX_OUTPUT_TOKENS, timeout: in
     raise RuntimeError("Semua model gagal -> " + " | ".join(errors))
 
 
-def stream_anamnesis_response(user_input: str, chat_history: list, patient_context: str = ""):
-    """Generator potongan teks mentah dari Gemini (satu panggilan LLM per pesan)."""
-    t0 = time.perf_counter()
-    candidates = get_candidates(user_input, chat_history)
-    messages = build_messages(user_input, chat_history, candidates, patient_context)
-    t_retrieval = time.perf_counter() - t0
-    first = True
-    for text in _stream_llm(messages):
-        if first:
-            print(
-                f"[timing] retrieval={t_retrieval:.2f}s ({len(candidates)} istilah) | "
-                f"token_pertama={time.perf_counter() - t0:.2f}s"
-            )
-            first = False
-        yield text
-    print(f"[timing] total={time.perf_counter() - t0:.2f}s")
 # ---------------------------------------------------------------------------
 # Pemetaan temuan -> kode SNOMED CT terdekat (dilakukan oleh kode, bukan LLM)
 # ---------------------------------------------------------------------------
@@ -392,25 +423,50 @@ def _load_json_object(text: str):
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+def _data_of(raw: str):
+    """Blok JSON dari keluaran AI (atau None)."""
+    _, tail, found = split_data_block(raw)
+    return _load_json_object(tail) if found else None
 def _as_final(result: dict, codes: list, candidates: dict) -> dict:
     result["status"] = "final"
     result["quick_actions"] = []
     result["codes"] = codes or fallback_codes(result["text"], candidates)
     return result
 def parse_response(raw: str, candidates: dict = None, force_final: bool = False) -> dict:
-    """Return dict: text, status ('ask'/'final'), quick_actions, codes, dropped."""
+    """Return dict: text, status ('ask'/'final'), quick_actions, codes, covered, dropped."""
     candidates = candidates or {}
     head, tail, found = split_data_block(raw)
+
     result = {
         "text": head.strip(),
         "status": "ask",
         "quick_actions": list(DEFAULT_QUICK_ACTIONS),
         "codes": [],
+        "covered": [],
         "dropped": 0,
     }
+
     data = _load_json_object(tail) if found else None
-    if data and str(data.get("status", "ask")).strip().lower() == "final":
+    status = str(data.get("status", "ask")).strip().lower() if data else ""
+
+    if data:
+        result["covered"] = clean_covered(data.get("covered"))
+
+    if status == "final":
         return _as_final(result, map_findings_to_codes(data.get("findings")), candidates)
+
+    if status == "tool":
+        # Batas langkah tercapai (atau mode tanpa tool) tetapi AI masih meminta tool
+        if not result["text"]:
+            result["text"] = (
+                "Maaf, analisis belum selesai dalam batas langkah agent. "
+                "Silakan kirim ulang pesan atau tekan Minta Kesimpulan Sekarang."
+            )
+        if force_final:
+            return _as_final(result, [], candidates)
+        return result
+
     if data:
         items = data.get("quick_actions")
         if isinstance(items, list):
@@ -418,6 +474,7 @@ def parse_response(raw: str, candidates: dict = None, force_final: bool = False)
             if cleaned:
                 result["quick_actions"] = cleaned[:3]
         return result
+
     # JSON tidak terbaca, tetapi dokter meminta kesimpulan: tetap beri kode terdekat
     if force_final:
         return _as_final(result, [], candidates)
@@ -442,6 +499,103 @@ def friendly_error(e: Exception) -> str:
     if hints:
         return " ".join(hints) + " Coba kirim ulang pesan Anda."
     return f"Terjadi kesalahan saat memanggil LLM: {msg}"
+# ---------------------------------------------------------------------------
+# AI AGENT: loop reason -> act (tool) -> observe, dengan jalur cepat
+# ---------------------------------------------------------------------------
+def run_agent(user_input: str, chat_history: list, patient_context: str = "",
+              mrn: str = None, use_tools: bool = True):
+    """Generator event untuk UI:
+      {"type": "text",  "text": <teks yang boleh tampil sekarang>}
+      {"type": "tool",  "label": <status>, "names": [...]}
+      {"type": "final", "raw": <keluaran AI mentah>, "steps": [<jejak tool>], "elapsed": <detik>}
+
+    JALUR CEPAT (hampir semua giliran): data pasien, tanda bahaya, dan checklist sudah dihitung
+    kode dan disisipkan ke prompt, sehingga AI cukup 1 panggilan. Tool hanya dipakai bila AI
+    memutuskan perlu (mis. skor HEART), dengan batas AGENT_MAX_STEPS langkah tambahan."""
+    t0 = time.perf_counter()
+    max_steps = AGENT_MAX_STEPS if use_tools else 0
+
+    # Persiapan lokal (milidetik, tanpa LLM)
+    candidates = get_candidates(user_input, chat_history)
+    patient = get_patient(mrn) if mrn else None
+    supporting = list_supporting(mrn) if mrn else []
+    texts = conversation_texts(list(chat_history) + [{"role": "user", "content": user_input}])
+    flags = compute_red_flags(patient, texts, supporting)
+    status = checklist_status(chat_history, patient)
+    agent_state = format_agent_state(flags, status)
+    tools_text = tools_prompt() if max_steps > 0 else ""
+
+    messages = build_messages(user_input, chat_history, candidates, patient_context, agent_state, tools_text)
+    ctx = {"mrn": mrn, "patient": patient, "texts": texts}
+    t_prep = time.perf_counter() - t0
+
+    steps, seen_calls = [], set()
+
+    for step in range(max_steps + 1):
+        raw = ""
+        first = True
+        for chunk in _stream_llm(messages):
+            raw += chunk
+            if first:
+                print(
+                    f"[agent] langkah {step + 1}: persiapan={t_prep:.2f}s "
+                    f"token_pertama={time.perf_counter() - t0:.2f}s"
+                )
+                first = False
+            yield {"type": "text", "text": visible_part(raw)}
+
+        data = _data_of(raw)
+        wants_tool = bool(data) and str(data.get("status", "")).strip().lower() == "tool"
+
+        if wants_tool and step < max_steps:
+            raw_calls = data.get("calls")
+            calls = [c for c in raw_calls if isinstance(c, dict)][:MAX_TOOL_CALLS] if isinstance(raw_calls, list) else []
+
+            if calls:
+                fresh, repeated = [], []
+                for call in calls:
+                    signature = (str(call.get("tool")), json.dumps(call.get("args") or {}, sort_keys=True, default=str))
+                    (repeated if signature in seen_calls else fresh).append(call)
+                    seen_calls.add(signature)
+
+                names = [str(c.get("tool")) for c in fresh] or [str(c.get("tool")) for c in repeated]
+                yield {"type": "tool", "label": tool_label(names), "names": names}
+
+                outputs = execute_tool_calls(fresh, ctx, MAX_TOOL_CALLS)
+                for call in repeated:
+                    outputs.append({
+                        "tool": str(call.get("tool")),
+                        "args": call.get("args") if isinstance(call.get("args"), dict) else {},
+                        "result": {"info": "tool ini sudah dipanggil dengan argumen yang sama; pakai hasil sebelumnya"},
+                        "summary": "dilewati (duplikat)",
+                        "ms": 0,
+                    })
+
+                for item in outputs:
+                    step = {
+                        "tool": item["tool"],
+                        "args": item["args"],
+                        "summary": item["summary"],
+                        "ms": item["ms"],
+                    }
+                    found = sources_of(item)
+                    if found:
+                        step["sources"] = found
+                    steps.append(step)
+                print(f"[agent] langkah {step + 1}: tool={names} " + ", ".join(f"{o['ms']}ms" for o in outputs))
+
+                messages.append(AIMessage(content=raw))
+                messages.append(HumanMessage(content=format_tool_results(outputs, last_step=(step + 1 >= max_steps))))
+                continue
+
+        elapsed = time.perf_counter() - t0
+        print(f"[agent] selesai: {step + 1} panggilan AI, {len(steps)} tool, total={elapsed:.2f}s")
+        yield {"type": "final", "raw": raw, "steps": steps, "elapsed": elapsed}
+        return
+
+    # Tidak tercapai secara normal; jaga-jaga
+    yield {"type": "final", "raw": raw, "steps": steps, "elapsed": time.perf_counter() - t0}
+
 # ---------------------------------------------------------------------------
 # Terjemahan istilah (Indonesia -> istilah Inggris gaya SNOMED) untuk pencarian
 # ---------------------------------------------------------------------------

@@ -109,10 +109,20 @@ def build_patient_context(mrn: str) -> str:
             content = " ".join(str(item["content"]).split())[:300]
             lines.append(f"- [{item['category']}, {when}] {content}")
 
-    previous = list_anamnesis_results(mrn, limit=1)
+    findings = patient.get("confirmed_findings") or []
+    if findings:
+        lines.append(
+            "Temuan terkonfirmasi dokter (SNOMED CT): "
+            + "; ".join(
+                f"{f.get('kategori', '')}: {f.get('term', '')} ({f.get('conceptId', '')})"
+                for f in findings[:15]
+            )
+        )
+
+    previous = [r for r in list_anamnesis_results(mrn, limit=3) if r.get("approved")][:1]
     if previous:
         summary = " ".join(previous[0]["summary"].split())[:600]
-        lines.append(f"Kesimpulan anamnesis AI sebelumnya ({previous[0]['created_at']}): {summary}")
+        lines.append(f"Kesimpulan anamnesis yang disetujui sebelumnya ({previous[0]['created_at']}): {summary}")
 
     text = "\n".join(lines).strip()
     return text[:MAX_CONTEXT_CHARS]
