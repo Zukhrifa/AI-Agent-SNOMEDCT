@@ -5,11 +5,12 @@ import streamlit as st
 
 from auth import audit_log
 from auth.session import close_account_page, require_admin
+from components.guideline_viewer import render_file_download_button
 from modules import guideline_rag as rag
 
 _dialog = getattr(st, "dialog", None) or st.experimental_dialog  # st.dialog butuh Streamlit >= 1.37
-_W = [3.2, 2.0, 0.9, 1.0, 2.2, 0.7]
-_HEAD = ["Dokumen", "Jenis", "Halaman", "Kutipan", "Diunggah", "Hapus"]
+_W = [2.9, 1.8, 0.8, 0.9, 1.9, 1.1, 0.6]
+_HEAD = ["Dokumen", "Jenis", "Halaman", "Kutipan", "Diunggah", "Unduh", "Hapus"]
 
 
 @_dialog("Konfirmasi hapus")
@@ -89,7 +90,9 @@ def _list_section(admin: dict) -> None:
         c[2].write(d["pages"])
         c[3].write(d["chunk_count"])
         c[4].write(f"{d['uploaded_by']}  \n{d['created_at']}")
-        if c[5].button("🗑", key=f"doc_del_{d['id']}", help="Hapus dokumen"):
+        with c[5]:
+            render_file_download_button(d, key=f"doc_dl_{d['id']}")
+        if c[6].button("🗑", key=f"doc_del_{d['id']}", help="Hapus dokumen"):
             _confirm_delete(admin, d)
 
 

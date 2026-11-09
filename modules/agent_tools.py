@@ -440,7 +440,8 @@ def _tool_search_guidelines(args: dict, ctx: dict) -> dict:
                     "boleh coba sekali lagi dengan kata kunci lain.",
         }
     return {"results": [
-        {"dokumen": h["title"], "halaman": h["page"], "bagian": h["section"], "kutipan": h["excerpt"]}
+        {"doc_id": h["doc_id"], "dokumen": h["title"], "halaman": h["page"],
+         "bagian": h["section"], "kutipan": h["excerpt"]}
         for h in hits
     ]}
 
@@ -554,7 +555,8 @@ def sources_of(item: dict) -> list:
     if item.get("tool") != "search_guidelines" or not isinstance(item.get("result"), dict):
         return []
     return [
-        {"dokumen": r.get("dokumen"), "halaman": r.get("halaman"), "bagian": r.get("bagian")}
+        {"doc_id": r.get("doc_id"), "dokumen": r.get("dokumen"),
+         "halaman": r.get("halaman"), "bagian": r.get("bagian")}
         for r in item["result"].get("results", [])
     ]
 

@@ -6,6 +6,7 @@ import time
 import streamlit as st
 from auth import audit_log
 
+from components.guideline_viewer import render_source_button
 from components.nav import go_to_patient_data
 from components.voice_input import render_voice_button
 from database import (
@@ -296,10 +297,12 @@ def _render_meta(msg: dict):
                 sources.append(src)
     if sources:
         with st.expander(f"📄 Sumber pedoman ({len(sources)})"):
-            for src in sources:
-                page = f", hal. {src['halaman']}" if src.get("halaman") else ""
-                section = f" ({src['bagian']})" if src.get("bagian") else ""
-                st.markdown(f"- **{src.get('dokumen')}**{page}{section}")
+            st.caption("Klik salah satu untuk membuka dokumen asli dan memverifikasi kutipan.")
+            for i, src in enumerate(sources):
+                render_source_button(
+                    src.get("doc_id"), src.get("dokumen") or "", src.get("halaman"),
+                    src.get("bagian") or "", key=f"src_{msg.get('id', i)}_{i}",
+                )
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ ACTIONS = {
     "ai_tanya": "Kirim pesan ke AI", "ai_jawab": "AI menjawab", "ai_error": "AI gagal menjawab",
     "ai_setuju": "Setujui hasil AI", "ai_tolak": "Tolak hasil AI",
     "dokumen_unggah": "Unggah dokumen pedoman", "dokumen_hapus": "Hapus dokumen pedoman",
+    "dokumen_lihat": "Buka dokumen pedoman",
 }
 _COLS = ("id", "user_id", "username", "full_name", "role", "action", "mrn", "detail", "created_at")
 def init_table() -> None:

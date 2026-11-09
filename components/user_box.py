@@ -1,4 +1,4 @@
-"""Menu akun di bawah sidebar (gaya Claude): chip nama/peran yang membuka menu Profil, Kelola akun, Dokumen pedoman (admin), Keluar."""
+"""Menu akun di bawah sidebar (gaya Claude): chip nama/peran yang membuka menu Profil, Kelola akun, Keluar."""
 import streamlit as st
 
 from auth.service import ROLE_LABEL
@@ -6,8 +6,12 @@ from auth.session import current_account_page, current_user, logout, open_accoun
 from components.admin_profile import render_profile_page
 from components.admin_docs import render_admin_docs_page
 from components.admin_users import render_admin_users_page
+from components.guideline_viewer import render_guidelines_page
 
-_PAGES = {"profile": render_profile_page, "admin": render_admin_users_page, "docs": render_admin_docs_page}
+_PAGES = {
+    "profile": render_profile_page, "admin": render_admin_users_page,
+    "docs": render_guidelines_page, "admin_docs": render_admin_docs_page,
+}
 
 # Ikon Material butuh Streamlit >= 1.37; versi lebih lama memakai emoji.
 _MATERIAL = tuple(int(p) for p in st.__version__.split(".")[:2] if p.isdigit()) >= (1, 37)
@@ -16,6 +20,7 @@ _ICON = {
     "profile": ":material/person:" if _MATERIAL else "👤",
     "admin": ":material/manage_accounts:" if _MATERIAL else "⚙️",
     "docs": ":material/description:" if _MATERIAL else "📄",
+    "admin_docs": ":material/library_books:" if _MATERIAL else "📚",
     "logout": ":material/logout:" if _MATERIAL else "🚪",
 }
 
@@ -65,8 +70,11 @@ def render_user_box() -> None:
             if user["role"] == "admin" and _item("Kelola akun", "admin", "menu_admin"):
                 open_account_page("admin")
                 st.rerun()
-            if user["role"] == "admin" and _item("Dokumen pedoman", "docs", "menu_docs"):
+            if _item("Dokumen pedoman", "docs", "menu_docs"):
                 open_account_page("docs")
+                st.rerun()
+            if user["role"] == "admin" and _item("Kelola dokumen", "admin_docs", "menu_admin_docs"):
+                open_account_page("admin_docs")
                 st.rerun()
             st.divider()
             if _item("Keluar", "logout", "menu_logout"):

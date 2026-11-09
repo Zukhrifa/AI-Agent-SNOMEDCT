@@ -14,3 +14,4 @@ libsql-client
 requests
 pypdf
 python-docx
+pypdfium2

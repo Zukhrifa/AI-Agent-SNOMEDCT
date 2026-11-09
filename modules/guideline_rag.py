@@ -14,9 +14,13 @@ from collections import Counter
 
 import streamlit as st
 
-from database import _NOW, _query, _write
+from database import _NOW, _query, _run, _write
 
 MAX_FILE_MB = 15
+CONTENT_TYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 MAX_PAGES = 400
 CHUNK_CHARS = 900          # panjang target satu kutipan
 MIN_CHUNK_CHARS = 40
@@ -48,6 +52,8 @@ def _ensure_table() -> None:
             pages INTEGER NOT NULL DEFAULT 0,
             chunk_count INTEGER NOT NULL DEFAULT 0,
             uploaded_by TEXT NOT NULL DEFAULT '',
+            content_type TEXT NOT NULL DEFAULT '',
+            file_data BLOB,
             created_at TEXT NOT NULL DEFAULT ({_NOW}))""", ()),
         ("""CREATE TABLE IF NOT EXISTS guideline_chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +63,11 @@ def _ensure_table() -> None:
             content TEXT NOT NULL)""", ()),
         ("CREATE INDEX IF NOT EXISTS idx_gchunk_doc ON guideline_chunks(doc_id)", ()),
     ])
+    try:  # migrasi tabel lama yang belum punya kolom file asli
+        _run([("SELECT file_data FROM guideline_docs LIMIT 1", ())])
+    except Exception:
+        _write([("ALTER TABLE guideline_docs ADD COLUMN content_type TEXT NOT NULL DEFAULT ''", ()),
+                ("ALTER TABLE guideline_docs ADD COLUMN file_data BLOB", ())])
     _READY = True
 
 
@@ -129,17 +140,38 @@ def extract_pages(data: bytes, filename: str) -> list:
 # Memotong teks jadi kutipan (tiap kutipan tidak melewati batas halaman)
 # ---------------------------------------------------------------------------
 _HEAD_MARK = "\u00a7 "  # penanda judul dari gaya Heading di DOCX
-_HEADING_RE = re.compile(r"^(?:(?:bab|bagian)\s+[ivxlc\d]+\b.*|\d+(?:\.\d+){0,3}[.)]?\s+\S.*)$", re.IGNORECASE)
+_HEADING_RE = re.compile(
+    r"^(?:(?:bab|bagian)\s*[ivxlc\d]+\b.*|\d{1,2}(?:\.\d{1,2}){0,3}[.)]?\s+\S.*|\d{1,2}(?:\.\d{1,2})+[.)]?\s*[a-z].*)$",
+    re.IGNORECASE,
+)
+_BAB_RE = re.compile(r"^(?:bab|bagian)\s*[ivxlc\d]+\b", re.IGNORECASE)
+_TOC_RE = re.compile(r"\.{4,}|\s\.{2,}\s*\d+$")  # baris daftar isi: titik-titik + nomor halaman
+_LIST_RE = re.compile(r"^(?:tabel|gambar|table|figure)\b.{0,40}?\d+[.:]?\s", re.IGNORECASE)
+_NOISE_HEAD = ("daftar isi", "daftar tabel", "daftar gambar", "daftar bacaan", "daftar pustaka")
+
+
+def _is_toc_page(text: str) -> bool:
+    """Halaman daftar isi/tabel/gambar/pustaka: padat kata kunci tapi tanpa isi, jadi tidak diindeks."""
+    lines = [" ".join(l.split()) for l in (text or "").split("\n") if l.strip()]
+    if not lines:
+        return False
+    if any(k in " ".join(lines[:3]).lower() for k in _NOISE_HEAD):
+        return True
+    toc = sum(1 for l in lines if _TOC_RE.search(l) or _LIST_RE.match(l))
+    return toc >= 5 and toc / len(lines) >= 0.3
 
 
 def _is_heading(line: str) -> bool:
     s = line.strip()
     if s.startswith(_HEAD_MARK):
         return True
-    if not (3 <= len(s) <= 90):
+    if not (3 <= len(s) <= 90) or _TOC_RE.search(s):
         return False
     if _HEADING_RE.match(s):
-        return len(s) <= 70 and not s.endswith((".", ";", ","))
+        if len(s) > 70 or s.endswith((";", ",")):
+            return False
+        # "Bab 5." boleh berakhir titik; judul bernomor biasa yang berakhir titik kemungkinan kalimat
+        return bool(_BAB_RE.match(s)) or not s.endswith(".")
     letters = [c for c in s if c.isalpha()]
     return len(letters) >= 4 and s.upper() == s and len(s.split()) <= 10
 
@@ -148,6 +180,8 @@ def chunk_pages(pages: list) -> list:
     """Return [{'page', 'section', 'content'}]. 'section' = judul bagian terakhir yang terdeteksi."""
     chunks, section = [], ""
     for page_no, text in pages:
+        if _is_toc_page(text):
+            continue
         cur, cur_len, cur_section = [], 0, section
 
         def flush():
@@ -294,11 +328,13 @@ def add_document(user: dict, data: bytes, filename: str, title: str, doc_type: s
     if not chunks:
         raise ValueError("Tidak ada teks yang bisa dipotong menjadi kutipan.")
 
+    ext = (filename or "").rsplit(".", 1)[-1].lower()
     _write([(
-        "INSERT INTO guideline_docs (title, doc_type, filename, file_hash, pages, chunk_count, uploaded_by) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO guideline_docs "
+        "(title, doc_type, filename, file_hash, pages, chunk_count, uploaded_by, content_type, file_data) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (title, doc_type or "", filename or "", file_hash, len(pages), len(chunks),
-         user.get("username", "")),
+         user.get("username", ""), CONTENT_TYPES.get(ext, "application/octet-stream"), data),
     )])
     doc_id = _query("SELECT id FROM guideline_docs WHERE file_hash = ?", (file_hash,))[0][0]
     try:
@@ -331,3 +367,16 @@ def delete_document(user: dict, doc_id: int) -> None:
         ("DELETE FROM guideline_docs WHERE id = ?", (int(doc_id),)),
     ])
     _get_index.clear()
+
+
+def get_file(doc_id: int):
+    """Return {'filename','content_type','data'} file asli, atau None jika tidak ada
+    (dokumen lama yang diunggah sebelum fitur ini ada)."""
+    _ensure_table()
+    row = _query(
+        "SELECT filename, content_type, file_data FROM guideline_docs WHERE id = ?", (int(doc_id),)
+    )
+    if not row or row[0][2] is None:
+        return None
+    filename, content_type, data = row[0]
+    return {"filename": filename, "content_type": content_type or "application/octet-stream", "data": data}
