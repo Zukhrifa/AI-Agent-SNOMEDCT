@@ -21,6 +21,7 @@ from modules.agent_tools import (
     tool_label,
     tools_prompt,
 )
+from modules.guideline_rag import has_documents
 from modules.rag_snomed import search_candidates, search_terms
 load_dotenv()
 # --- Konfigurasi (bisa diubah lewat .env) ---
@@ -587,6 +588,52 @@ def run_agent(user_input: str, chat_history: list, patient_context: str = "",
                 messages.append(AIMessage(content=raw))
                 messages.append(HumanMessage(content=format_tool_results(outputs, last_step=(step + 1 >= max_steps))))
                 continue
+
+        # Kesimpulan tercapai ("final"): cari rekomendasi tindakan di dokumen pedoman
+        # secara OTOMATIS dari kode, berdasarkan dugaan diagnosis — tidak menunggu dokter
+        # bertanya, dan tidak bergantung pada penilaian AI apakah ini "pertanyaan SOP" atau bukan.
+        status_val = str((data or {}).get("status", "")).strip().lower()
+        already_searched = any(s["tool"] == "search_guidelines" for s in steps)
+        if status_val == "final" and max_steps > 0 and not already_searched and has_documents():
+            findings = (data or {}).get("findings") if isinstance(data, dict) else None
+            diag_labels = [
+                str(f.get("label", "")).strip()
+                for f in (findings or [])
+                if isinstance(f, dict) and str(f.get("kategori", "")).strip().lower() == "diagnosis"
+                and str(f.get("label", "")).strip()
+            ]
+            query = " ".join(diag_labels[:2]).strip()
+            if query:
+                yield {"type": "tool", "label": tool_label(["search_guidelines"]), "names": ["search_guidelines"]}
+                auto_outputs = execute_tool_calls(
+                    [{"tool": "search_guidelines", "args": {"query": query}}], ctx, 1
+                )
+                item = auto_outputs[0]
+                trace = {
+                    "tool": item["tool"], "args": item["args"],
+                    "summary": item["summary"], "ms": item["ms"],
+                }
+                found = sources_of(item)
+                if found:
+                    trace["sources"] = found
+                steps.append(trace)
+                print(f"[agent] auto-cek pedoman: query='{query}' -> {item['summary']}")
+
+                if isinstance(item["result"], dict) and item["result"].get("results"):
+                    messages.append(AIMessage(content=raw))
+                    messages.append(HumanMessage(content=(
+                        format_tool_results(auto_outputs, last_step=True)
+                        + "\nSisipkan rekomendasi tindakan dari kutipan di atas ke dalam ringkasan jawaban akhir, "
+                          "dengan sitasi (Sumber: nama dokumen, hal. X). Jika kutipan tidak relevan dengan diagnosis "
+                          "ini, biarkan jawaban seperti semula tanpa menyebutnya. Tetap format JSON ===DATA=== yang sama "
+                          "seperti sebelumnya (findings tidak perlu diulang menulis ulang kode)."
+                    )))
+                    raw2 = ""
+                    for chunk in _stream_llm(messages):
+                        raw2 += chunk
+                        yield {"type": "text", "text": visible_part(raw2)}
+                    if raw2.strip():
+                        raw = raw2
 
         elapsed = time.perf_counter() - t0
         print(f"[agent] selesai: {step + 1} panggilan AI, {len(steps)} tool, total={elapsed:.2f}s")
