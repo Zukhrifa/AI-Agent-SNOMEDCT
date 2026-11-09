@@ -572,7 +572,7 @@ def run_agent(user_input: str, chat_history: list, patient_context: str = "",
                     })
 
                 for item in outputs:
-                    step = {
+                    trace = {
                         "tool": item["tool"],
                         "args": item["args"],
                         "summary": item["summary"],
@@ -580,8 +580,8 @@ def run_agent(user_input: str, chat_history: list, patient_context: str = "",
                     }
                     found = sources_of(item)
                     if found:
-                        step["sources"] = found
-                    steps.append(step)
+                        trace["sources"] = found
+                    steps.append(trace)
                 print(f"[agent] langkah {step + 1}: tool={names} " + ", ".join(f"{o['ms']}ms" for o in outputs))
 
                 messages.append(AIMessage(content=raw))
