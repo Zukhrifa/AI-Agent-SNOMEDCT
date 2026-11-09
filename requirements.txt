@@ -12,3 +12,5 @@ sentence-transformers
 google-generativeai
 libsql-client
 requests
+pypdf
+python-docx
