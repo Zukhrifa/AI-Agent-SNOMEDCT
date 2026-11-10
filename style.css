@@ -21,19 +21,19 @@ body, .stApp {
     color: #2563eb;
 }
 
-/* Tombol primary (type="primary"), mis. penanda halaman aktif di sidebar.
-   Dibuat polos seperti tombol biasa (tanpa warna tema bawaan Streamlit). */
-.stButton > button[kind="primary"],
-.stButton > button[data-testid="stBaseButton-primary"] {
-    background-color: #ffffff !important;
-    color: #1e293b !important;
-    border: 1px solid #e2e8f0 !important;
+/* Tombol Hapus Sesi (merah) */
+.st-key-btn_hapus_sesi .stButton > button {
+    background-color: #dc2626;
+    border-color: #dc2626;
+    color: #ffffff;
+    font-weight: 600;
 }
-.stButton > button[kind="primary"]:hover,
-.stButton > button[data-testid="stBaseButton-primary"]:hover {
-    border-color: #2563eb !important;
-    background-color: #eff6ff !important;
-    color: #2563eb !important;
+.st-key-btn_hapus_sesi .stButton > button:hover,
+.st-key-btn_hapus_sesi .stButton > button:active,
+.st-key-btn_hapus_sesi .stButton > button:focus:not(:active) {
+    background-color: #b91c1c;
+    border-color: #b91c1c;
+    color: #ffffff;
 }
 
 /* Tombol Utama (Primary Blue) */
@@ -62,3 +62,26 @@ header[data-testid="stHeader"] {
         max-width: 92% !important;
     }
 }
+
+/* --- Tabel gaya log aktivitas (daftar akun & data pasien) dengan tombol --- */
+[class*="st-key-gtbl_"] [data-testid="stHorizontalBlock"] { gap: 0; align-items: center; }
+[class*="st-key-gtbl_wrap"] { gap: 0; }
+[class*="st-key-gtbl_box"] { gap: 0; padding: 0; border-radius: 12px; overflow: hidden; }
+[class*="st-key-gtbl_h"], [class*="st-key-gtbl_r"] { gap: 0; border-bottom: 1px solid #e2e8f0; }
+[class*="st-key-gtbl_h"] { background-color: #eef1f5; }
+[class*="st-key-gtbl_h"] p { color: #64748b; font-size: 0.85rem; margin: 0; }
+[class*="st-key-gtbl_h_pt"] {
+    border: 1px solid #e2e8f0; border-bottom: none; border-radius: 12px 12px 0 0; padding-right: 15px;
+}
+[class*="st-key-gtbl_box_pt"] { border-top-left-radius: 0; border-top-right-radius: 0; }
+[class*="st-key-gtbl_"] [data-testid="stColumn"],
+[class*="st-key-gtbl_"] [data-testid="column"] {
+    border-right: 1px solid #e2e8f0;
+    padding: 0.5rem 0.75rem;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+[class*="st-key-gtbl_"] [data-testid="stColumn"]:last-child,
+[class*="st-key-gtbl_"] [data-testid="column"]:last-child { border-right: none; }

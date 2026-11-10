@@ -65,24 +65,26 @@ def render_admin_users_page() -> None:
     st.caption("🔑 Reset password · ⛔/✅ Nonaktifkan/Aktifkan. Password sementara hilang otomatis "
                "setelah pengguna berhasil login.")
     accounts = service.list_accounts(admin["id"])
-    cols = st.columns(_W)
-    for c, title in zip(cols, _HEAD):
-        c.markdown(f"**{title}**")
-    for a in accounts:
-        me = a["id"] == admin["id"]
-        c = st.columns(_W)
-        c[0].markdown(f"**{a['full_name']}**{' (Anda)' if me else ''}  \n@{a['username']}")
-        c[1].write(service.ROLE_LABEL.get(a["role"], a["role"]))
-        c[2].write(_status(a))
-        if a["temp_password"]:
-            c[3].code(a["temp_password"], language=None)
-        else:
-            c[3].write("-")
-        c[4].write(a["last_login_at"] or "-")
-        if c[5].button("🔑", key=f"rst_{a['id']}", disabled=me, help="Reset password"):
-            _confirm(admin["id"], a, "reset")
-        if c[6].button("⛔" if a["is_active"] else "✅", key=f"act_{a['id']}", disabled=me,
-                       help="Nonaktifkan akun" if a["is_active"] else "Aktifkan akun"):
-            _confirm(admin["id"], a, "toggle")
+    with st.container(border=True, key="gtbl_box_acc"):
+        with st.container(key="gtbl_h_acc"):
+            for c, title in zip(st.columns(_W), _HEAD):
+                c.caption(title)
+        for a in accounts:
+            me = a["id"] == admin["id"]
+            with st.container(key=f"gtbl_r_acc_{a['id']}"):
+                c = st.columns(_W)
+                c[0].markdown(f"**{a['full_name']}**{' (Anda)' if me else ''}  \n@{a['username']}")
+                c[1].write(service.ROLE_LABEL.get(a["role"], a["role"]))
+                c[2].write(_status(a))
+                if a["temp_password"]:
+                    c[3].code(a["temp_password"], language=None)
+                else:
+                    c[3].write("-")
+                c[4].write(a["last_login_at"] or "-")
+                if c[5].button("🔑", key=f"rst_{a['id']}", disabled=me, help="Reset password"):
+                    _confirm(admin["id"], a, "reset")
+                if c[6].button("⛔" if a["is_active"] else "✅", key=f"act_{a['id']}", disabled=me,
+                               help="Nonaktifkan akun" if a["is_active"] else "Aktifkan akun"):
+                    _confirm(admin["id"], a, "toggle")
     st.subheader("Log aktivitas")
     audit_log.live(_log_view)(accounts)

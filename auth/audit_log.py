@@ -1,6 +1,8 @@
 """Log aktivitas pengguna (append-only): siapa melakukan apa, kapan, pada pasien mana.
 Satu tabel pusat `activity_logs`; ditampilkan di Kelola Akun, Data Pasien, dan panel roomchat.
 Isi pesan/data klinis TIDAK disimpan di log, hanya jenis aktivitas dan ringkasan singkat."""
+import threading
+
 import streamlit as st
 from database import _run, _write
 
@@ -10,7 +12,7 @@ ACTIONS = {
     "login": "Login", "login_gagal": "Login gagal", "logout": "Logout",
     "akun_buat": "Buat akun", "akun_reset": "Reset password", "akun_aktif": "Aktifkan akun",
     "akun_nonaktif": "Nonaktifkan akun", "password_ganti": "Ganti password",
-    "pasien_buat": "Tambah pasien", "kunjungan_baru": "Tambah kunjungan", "pasien_lihat": "Buka data pasien",
+    "pasien_buat": "Tambah pasien", "pasien_lihat": "Buka data pasien",
     "identitas_ubah": "Ubah identitas", "keluhan_tambah": "Tambah keluhan utama",
     "keluhan_hapus": "Hapus keluhan utama", "anamnesis_ubah": "Ubah anamnesis",
     "fisik_ubah": "Ubah pemeriksaan fisik", "penunjang_tambah": "Tambah data penunjang",
@@ -18,7 +20,7 @@ ACTIONS = {
     "roomchat_buka": "Buka roomchat", "roomchat_mulai": "Mulai roomchat",
     "chat_clear": "Bersihkan chat", "sesi_hapus": "Hapus sesi chat",
     "pasien_arsip": "Arsipkan pasien", "pasien_aktif": "Aktifkan kembali pasien",
-    "riwayat_lihat": "Lihat riwayat roomchat",
+    "riwayat_lihat": "Lihat riwayat roomchat", "kunjungan_buat": "Tambah kunjungan",
     "ai_tanya": "Kirim pesan ke AI", "ai_jawab": "AI menjawab", "ai_error": "AI gagal menjawab",
     "ai_setuju": "Setujui hasil AI", "ai_tolak": "Tolak hasil AI",
 }
@@ -40,15 +42,19 @@ def log(action: str, mrn: str = None, detail: str = "", user: dict = None) -> No
     user = user or st.session_state.get("auth_user")
     if not user:
         return
-    try:
-        _write([(
-            "INSERT INTO activity_logs (user_id, username, full_name, role, action, mrn, detail) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user["id"], user["username"], user.get("full_name") or "", user["role"],
-             action, mrn, (detail or "")[:300]),
-        )])
-    except Exception as e:
-        print(f"[audit] gagal mencatat {action}: {e}")
+    args = (user["id"], user["username"], user.get("full_name") or "", user["role"],
+            action, mrn, (detail or "")[:300])
+
+    def _bg():
+        try:
+            _write([(
+                "INSERT INTO activity_logs (user_id, username, full_name, role, action, mrn, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)", args,
+            )])
+        except Exception as e:
+            print(f"[audit] gagal mencatat {action}: {e}")
+
+    threading.Thread(target=_bg, daemon=True).start()  # tulis di latar agar klik tidak menunggu database
 def log_once(action: str, mrn: str = None, detail: str = "") -> None:
     """Catat sekali per sesi login untuk (aktivitas, MRN) yang sama, agar rerun tidak membanjiri log."""
     seen = st.session_state.setdefault("_audit_seen", set())

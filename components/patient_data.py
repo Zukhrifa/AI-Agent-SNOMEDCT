@@ -82,6 +82,7 @@ def _tab_identity(mrn: str, patient: dict):
 
         dob = "" if dob_unknown else dob_value.isoformat()
         update_patient_name(mrn, name.strip())
+        _overview.clear()
         update_patient(mrn, birth_date=dob, sex=sex)
         audit_log.log("identitas_ubah", mrn, "identitas pasien")
 
@@ -350,6 +351,11 @@ def _tab_chat_history(mrn: str):
             st.markdown(str(m.get("content", "")))
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def _overview() -> list:
+    return list_patient_overview()
+
+
 def _fmt_date(iso) -> str:
     try:
         return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -370,7 +376,7 @@ SORTS = {
 
 def _page_patients():
     st.caption("Klik **Cek kunjungan** untuk melihat riwayat kunjungan pasien.")
-    rows = list_patient_overview()
+    rows = _overview()
     names = {r["mrn"]: r["name"] for r in rows}
 
     c1, c2, c3 = st.columns([4, 3, 1])
@@ -394,6 +400,7 @@ def _page_patients():
                 st.error(f"MRN {m} sudah dipakai oleh {names[m]}.")
             else:
                 ensure_patient(m, n)
+                _overview.clear()
                 audit_log.log("pasien_buat", m)
                 go_to_patient_data(m)
                 st.rerun()
@@ -408,18 +415,21 @@ def _page_patients():
         return
 
     widths = [3, 2, 2, 2, 2]
-    with st.container(height=460, border=True):
-        for col, label in zip(st.columns(widths), ["Nama", "No. RM", "Jenis kelamin", "Tanggal lahir", ""]):
-            col.caption(label)
-        for r in rows:
-            cols = st.columns(widths)
-            cols[0].write(r["name"])
-            cols[1].write(r["mrn"])
-            cols[2].write(r["sex"] or "—")
-            cols[3].write(_fmt_date(r["birth_date"]))
-            if cols[4].button("Cek kunjungan", key=f"cek_{r['mrn']}", use_container_width=True):
-                go_to_patient_data(r["mrn"])
-                st.rerun()
+    with st.container(key="gtbl_wrap_pt"):
+        with st.container(key="gtbl_h_pt"):  # header di luar area scroll -> selalu terlihat
+            for col, label in zip(st.columns(widths), ["Nama", "No. RM", "Jenis kelamin", "Tanggal lahir", ""]):
+                col.caption(label)
+        with st.container(height=420, border=True, key="gtbl_box_pt"):
+            for r in rows:
+                with st.container(key=f"gtbl_r_pt_{r['mrn']}"):
+                    cols = st.columns(widths)
+                    cols[0].write(r["name"])
+                    cols[1].write(r["mrn"])
+                    cols[2].write(r["sex"] or "—")
+                    cols[3].write(_fmt_date(r["birth_date"]))
+                    if cols[4].button("Cek kunjungan", key=f"cek_{r['mrn']}", use_container_width=True):
+                        go_to_patient_data(r["mrn"])
+                        st.rerun()
 
 
 def _page_visits(mrn: str):
