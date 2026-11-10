@@ -43,7 +43,7 @@ def render_sidebar():
     st.sidebar.subheader("🗂 Data Pasien")
     viewing_data = st.session_state.get("view") == "patient_data"
     if st.sidebar.button("Data Pasien", key="sb_data_home", use_container_width=True,
-                         type="primary" if viewing_data else "secondary"):
+                         type="secondary" if viewing_data else "secondary"):
         close_account_page()
         go_to_patient_data()
         st.rerun()
@@ -72,4 +72,4 @@ def render_sidebar():
                 st.rerun()
     st.sidebar.divider()
     st.sidebar.subheader("Profil dan Pengaturan")
-    render_user_box()  # di paling akhir agar menu akun berada di bawah sidebar
+    render_user_box() 
