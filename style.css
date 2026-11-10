@@ -21,19 +21,19 @@ body, .stApp {
     color: #2563eb;
 }
 
-/* Tombol Hapus Sesi (merah) */
-.st-key-btn_hapus_sesi .stButton > button {
-    background-color: #dc2626;
-    border-color: #dc2626;
-    color: #ffffff;
-    font-weight: 600;
+/* Tombol primary (type="primary"), mis. penanda halaman aktif di sidebar.
+   Dibuat polos seperti tombol biasa (tanpa warna tema bawaan Streamlit). */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="stBaseButton-primary"] {
+    background-color: #ffffff !important;
+    color: #1e293b !important;
+    border: 1px solid #e2e8f0 !important;
 }
-.st-key-btn_hapus_sesi .stButton > button:hover,
-.st-key-btn_hapus_sesi .stButton > button:active,
-.st-key-btn_hapus_sesi .stButton > button:focus:not(:active) {
-    background-color: #b91c1c;
-    border-color: #b91c1c;
-    color: #ffffff;
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="stBaseButton-primary"]:hover {
+    border-color: #2563eb !important;
+    background-color: #eff6ff !important;
+    color: #2563eb !important;
 }
 
 /* Tombol Utama (Primary Blue) */
