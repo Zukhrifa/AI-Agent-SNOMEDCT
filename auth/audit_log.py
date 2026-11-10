@@ -10,17 +10,17 @@ ACTIONS = {
     "login": "Login", "login_gagal": "Login gagal", "logout": "Logout",
     "akun_buat": "Buat akun", "akun_reset": "Reset password", "akun_aktif": "Aktifkan akun",
     "akun_nonaktif": "Nonaktifkan akun", "password_ganti": "Ganti password",
-    "pasien_buat": "Tambah pasien", "pasien_lihat": "Buka data pasien",
+    "pasien_buat": "Tambah pasien", "kunjungan_baru": "Tambah kunjungan", "pasien_lihat": "Buka data pasien",
     "identitas_ubah": "Ubah identitas", "keluhan_tambah": "Tambah keluhan utama",
     "keluhan_hapus": "Hapus keluhan utama", "anamnesis_ubah": "Ubah anamnesis",
     "fisik_ubah": "Ubah pemeriksaan fisik", "penunjang_tambah": "Tambah data penunjang",
     "penunjang_hapus": "Hapus data penunjang", "temuan_hapus": "Hapus temuan SNOMED",
     "roomchat_buka": "Buka roomchat", "roomchat_mulai": "Mulai roomchat",
     "chat_clear": "Bersihkan chat", "sesi_hapus": "Hapus sesi chat",
+    "pasien_arsip": "Arsipkan pasien", "pasien_aktif": "Aktifkan kembali pasien",
+    "riwayat_lihat": "Lihat riwayat roomchat",
     "ai_tanya": "Kirim pesan ke AI", "ai_jawab": "AI menjawab", "ai_error": "AI gagal menjawab",
     "ai_setuju": "Setujui hasil AI", "ai_tolak": "Tolak hasil AI",
-    "dokumen_unggah": "Unggah dokumen pedoman", "dokumen_hapus": "Hapus dokumen pedoman",
-    "dokumen_lihat": "Buka dokumen pedoman",
 }
 _COLS = ("id", "user_id", "username", "full_name", "role", "action", "mrn", "detail", "created_at")
 def init_table() -> None:

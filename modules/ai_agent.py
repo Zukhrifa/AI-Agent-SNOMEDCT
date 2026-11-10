@@ -76,19 +76,19 @@ STATUS AGENT (dihitung sistem, andalkan ini):
 {{TOOLS_BLOCK}}
 ALUR:
 A. Jika informasi belum cukup -> status "ask": tanggapi jawaban terakhir (maksimal 3 kalimat), lalu beri 3 pertanyaan lanjutan BARU yang singkat tentang item yang BELUM digali pada checklist. Jika ada tanda bahaya KRITIS, sebutkan di awal tanggapan dan sarankan evaluasi segera, lalu tetap gali informasi yang paling menentukan.
-B. Status "final" jika (1) item inti checklist (onset, quality, radiation, duration, associated, risk_factors) sudah terisi dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan, atau (3) ada tanda bahaya kritis dan data sudah cukup untuk dugaan awal. Tulis kesimpulan ringkas dengan struktur:
+B. Status "final" hanya jika dokter meminta kesimpulan, atau informasi dari JAWABAN PASIEN dan DATA PASIEN TERSIMPAN kunjungan ini sudah cukup sehingga SETIAP temuan punya bukti. Jumlah pertanyaan tidak dibatasi: bila satu gejala inti saja belum jelas atau belum terbukti, tetap status "ask" dan gali yang belum jelas. Tanda bahaya kritis disebut di awal tetapi tidak menggantikan bukti. Tulis kesimpulan ringkas dengan struktur:
 Ringkasan gejala: ...
 Dugaan diagnosis (urut dari paling mungkin, maksimal 3): ...
 Dasar: ...
 Tanda bahaya / saran pemeriksaan lanjutan: ...
-Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
+Jika dokter meminta kesimpulan tetapi data belum memadai, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
 C. Jika dokter menyatakan kesimpulan sebelumnya TIDAK akurat: buat kesimpulan BARU (status "final") yang berbeda dan lebih sesuai. Tinjau ulang semua data, pertimbangkan diagnosis alternatif, perbaiki findings. Jangan mengulang kesimpulan yang sama.
 
 TEMUAN UNTUK KODE SNOMED CT:
 - Anda TIDAK menulis kode angka. Sebutkan konsep klinisnya di "findings"; sistem akan mencari kode SNOMED CT terdekat dari database.
 - Setiap temuan: "label" (istilah Indonesia), "term_en" (istilah medis Inggris baku, sependek mungkin, mis. "chest pain", "hypertension", "angina pectoris"), "kategori": "gejala" atau "faktor_risiko" atau "diagnosis".
 - Status "ask": findings harus [].
-- Status "final": WAJIB isi findings: minimal 1 gejala dan 1-3 dugaan diagnosis, ditambah faktor risiko bila ada. Walau tidak pasti, tetap tulis dugaan yang paling mendekati (di teks tandai sebagai dugaan). Jangan mengosongkan findings.
+- Status "final": isi findings HANYA yang ada buktinya. Setiap temuan wajib punya "bukti": kutipan singkat (maks 12 kata) persis dari Jawaban pasien atau DATA PASIEN TERSIMPAN kunjungan ini. Riwayat kunjungan sebelumnya BUKAN bukti gejala saat ini. Dilarang mengarang; tanpa bukti, jangan tulis temuan itu.
 
 Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulisan term_en; pakai bila relevan):
 {{REFERENSI}}
@@ -96,13 +96,13 @@ Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulis
 FORMAT OUTPUT (wajib persis, tanpa teks lain):
 [teks tanggapan atau kesimpulan]
 {{DELIM}}
-{"status": "ask atau final", "covered": ["onset", "quality"], "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
+{"status": "ask atau final", "covered": ["onset", "quality"], "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala", "bukti": "nyeri dada sejak tadi pagi"}]}
 Pada status "final", "quick_actions" harus []. "covered" = kunci checklist yang sudah digali (kumulatif) dari: onset, provocation, quality, radiation, severity, duration, associated, risk_factors, history, medications.
 Baris pemisah harus persis "{{DELIM}}" (tiga tanda sama dengan di kiri DAN kanan) pada baris tersendiri, tidak boleh dihilangkan atau diubah."""
 TOOLS_BLOCK_TEMPLATE = """
 TOOL (opsional, hanya bila perlu):
 {{TOOLS}}
-Aturan tool: tanda bahaya, checklist, dan data pasien SUDAH tersedia di atas, jadi jangan memanggil tool untuk hal itu. Panggil tool HANYA untuk: menghitung skor risiko (calculate_heart_score) bila datanya cukup, mencari kode untuk istilah spesifik, melihat detail data lengkap, atau mencari isi SOP/pedoman (search_guidelines). Jika dokter bertanya tentang SOP, prosedur, pemeriksaan, atau tatalaksana dan tool search_guidelines tersedia, panggil tool itu lebih dulu dan jawab HANYA berdasarkan kutipan yang dikembalikan. Tulis sumbernya di teks dengan format (Sumber: nama dokumen, hal. X). Jika tidak ada kutipan yang relevan, katakan terus terang bahwa tidak ditemukan di dokumen pedoman, dan jangan mengarang isi dokumen. Maksimal {{MAX_CALLS}} tool per langkah. Untuk memanggil tool, keluarkan HANYA (tanpa teks sebelum pemisah):
+Aturan tool: tanda bahaya, checklist, dan data pasien SUDAH tersedia di atas, jadi jangan memanggil tool untuk hal itu. Panggil tool HANYA untuk: menghitung skor risiko (calculate_heart_score) bila datanya cukup, mencari kode untuk istilah spesifik, melihat detail data lengkap, atau mencari isi SOP/pedoman (search_guidelines). Jika dokter bertanya tentang SOP, prosedur, pemeriksaan, atau tatalaksana dan tool search_guidelines tersedia, panggil tool itu lebih dulu dan jawab HANYA berdasarkan kutipan yang dikembalikan. Bila kutipan relevan, tulis rekomendasinya beserta sumbernya di teks, mis. \"Berdasarkan <nama dokumen>, hal. X, dokter perlu ...\" atau (Sumber: nama dokumen, hal. X); nomor halaman WAJIB disertakan. Jika dokter bertanya soal SOP/pedoman tetapi tidak ada kutipan yang relevan, katakan terus terang bahwa tidak ditemukan di dokumen pedoman, dan jangan mengarang isi dokumen. Maksimal {{MAX_CALLS}} tool per langkah. Untuk memanggil tool, keluarkan HANYA (tanpa teks sebelum pemisah):
 {{DELIM}}
 {"status": "tool", "calls": [{"tool": "nama_tool", "args": {}}]}
 Sebagian besar giliran TIDAK memerlukan tool: langsung jawab (status ask atau final).
@@ -189,6 +189,24 @@ def split_data_block(raw: str):
 def strip_data_block(text: str) -> str:
     """Bersihkan pesan lama yang terlanjur tersimpan bersama blok data."""
     return split_data_block(text)[0].strip()
+_CITE_RE = re.compile(r"hal(?:aman)?\.?\s*(\d+(?:\s*(?:[,\-\u2013&]|dan)\s*\d+)*)", re.IGNORECASE)
+
+
+def _prune_sources(steps: list, answer: str) -> None:
+    """Sumber pedoman yang ditampilkan hanya yang halamannya DISITASI di teks jawaban.
+    Hasil pencarian yang tidak dipakai AI (tidak relevan) tidak ikut tampil di UI."""
+    cited = {int(n) for m in _CITE_RE.findall(answer or "") for n in re.findall(r"\d+", m)}
+    for st_ in steps:
+        src = st_.get("sources")
+        if not src:
+            continue
+        keep = [x for x in src if x.get("halaman") is not None and int(x["halaman"]) in cited]
+        if keep:
+            st_["sources"] = keep
+        else:
+            st_.pop("sources", None)
+
+
 def visible_part(raw: str) -> str:
     """Bagian teks yang boleh ditampilkan saat streaming."""
     head, _, found = split_data_block(raw)
@@ -364,13 +382,26 @@ def find_best_concept(term_en: str, label: str):
     if _ratio(ref, best["term"]) < 0.5:
         best = pool[0]
     return best, match_label(ref, best["term"])
-def map_findings_to_codes(findings) -> list:
+def _tok(text) -> set:
+    return set(re.findall(r"\w+", str(text).lower()))
+
+
+def _grounded(item: dict, facts_tokens: set) -> bool:
+    """Bukti temuan harus (>= 60% katanya) ada di fakta kunjungan ini."""
+    bukti = _tok(item.get("bukti", ""))
+    return bool(bukti) and len(bukti & facts_tokens) / len(bukti) >= 0.6
+
+
+def map_findings_to_codes(findings, facts: str = None) -> list:
     codes, seen = [], set()
     if not isinstance(findings, list):
         return codes
+    facts_tokens = _tok(facts) if facts is not None else None
     for item in findings[:MAX_FINDINGS]:
         if not isinstance(item, dict):
             continue
+        if facts_tokens is not None and not _grounded(item, facts_tokens):
+            continue   # tanpa bukti -> dibuang
         label = str(item.get("label", "")).strip()
         term_en = str(item.get("term_en", "")).strip()
         if not (label or term_en):
@@ -434,7 +465,7 @@ def _as_final(result: dict, codes: list, candidates: dict) -> dict:
     result["quick_actions"] = []
     result["codes"] = codes or fallback_codes(result["text"], candidates)
     return result
-def parse_response(raw: str, candidates: dict = None, force_final: bool = False) -> dict:
+def parse_response(raw: str, candidates: dict = None, force_final: bool = False, facts: str = None) -> dict:
     """Return dict: text, status ('ask'/'final'), quick_actions, codes, covered, dropped."""
     candidates = candidates or {}
     head, tail, found = split_data_block(raw)
@@ -455,7 +486,14 @@ def parse_response(raw: str, candidates: dict = None, force_final: bool = False)
         result["covered"] = clean_covered(data.get("covered"))
 
     if status == "final":
-        return _as_final(result, map_findings_to_codes(data.get("findings")), candidates)
+        codes = map_findings_to_codes(data.get("findings"), facts)
+        if facts is not None and not force_final and not any(c["kategori"] == "gejala" for c in codes):
+            result["text"] = (
+                "Informasi dari jawaban pasien belum cukup untuk kesimpulan yang dapat "
+                "diverifikasi. Silakan lanjutkan anamnesis."
+            )
+            return result   # tetap status "ask"
+        return _as_final(result, codes, candidates)
 
     if status == "tool":
         # Batas langkah tercapai (atau mode tanpa tool) tetapi AI masih meminta tool
@@ -624,8 +662,10 @@ def run_agent(user_input: str, chat_history: list, patient_context: str = "",
                     messages.append(HumanMessage(content=(
                         format_tool_results(auto_outputs, last_step=True)
                         + "\nSisipkan rekomendasi tindakan dari kutipan di atas ke dalam ringkasan jawaban akhir, "
-                          "dengan sitasi (Sumber: nama dokumen, hal. X). Jika kutipan tidak relevan dengan diagnosis "
-                          "ini, biarkan jawaban seperti semula tanpa menyebutnya. Tetap format JSON ===DATA=== yang sama "
+                          "dengan sumber, mis. \"Berdasarkan <nama dokumen>, hal. X, dokter perlu merujuk/memeriksa ...\" (nomor halaman wajib). "
+                          "HANYA pakai kutipan yang benar-benar berkaitan dengan diagnosis dan kronologi sakit pasien. Jika tidak ada yang "
+                          "berkaitan, biarkan jawaban seperti semula dan JANGAN menyebut dokumen, halaman, atau \"tidak ditemukan\". "
+                          "Tetap format JSON ===DATA=== yang sama "
                           "seperti sebelumnya (findings tidak perlu diulang menulis ulang kode)."
                     )))
                     raw2 = ""
@@ -637,10 +677,12 @@ def run_agent(user_input: str, chat_history: list, patient_context: str = "",
 
         elapsed = time.perf_counter() - t0
         print(f"[agent] selesai: {step + 1} panggilan AI, {len(steps)} tool, total={elapsed:.2f}s")
+        _prune_sources(steps, visible_part(raw))
         yield {"type": "final", "raw": raw, "steps": steps, "elapsed": elapsed}
         return
 
     # Tidak tercapai secara normal; jaga-jaga
+    _prune_sources(steps, visible_part(raw))
     yield {"type": "final", "raw": raw, "steps": steps, "elapsed": time.perf_counter() - t0}
 
 # ---------------------------------------------------------------------------

@@ -5,15 +5,17 @@ from auth import audit_log
 from components.context_panel import render_context_panel
 from components.user_box import render_account_page   # taruh bersama import lainnya
 from components.chat_ui import render_chat_room, send_user_message
-from components.nav import go_to_patient_data, open_consultation
+from components.nav import go_to_patient_data, open_consultation, sync_url
 from components.patient_data import render_patient_data_page
 from components.sidebar import render_sidebar
 from database import (
-    delete_consultation,
+    create_visit,
     ensure_patient,
     get_all_consultations,
     list_patients,
+    list_visits,
     save_or_update_consultation,
+    set_visit_archived,
     update_patient_name,
 )
 from modules.ai_agent import DEFAULT_QUICK_ACTIONS
@@ -58,47 +60,48 @@ try:
 except Exception as e:
     st.warning(f"Pencarian SNOMED CT belum siap (jalankan ingest_chroma.py dulu): {e}")
 
-# 3. Sidebar
+# 3. Sidebar (URL disinkronkan dulu agar tombol Kembali browser berfungsi)
+sync_url()
 render_sidebar()
 if render_account_page():
     st.stop()
 
 
+def _open_visits(mrn: str) -> list:
+    """Kunjungan yang roomchat-nya belum diarsipkan (terbaru dulu)."""
+    return [v for v in list_visits(mrn) if not v["archived"]]
+
+
 def render_new_consultation_form():
     st.title("🩺 Medical Anamnesis System")
     st.write(
-        "Pilih pasien yang sudah terdaftar atau buat pasien baru. "
-        "Data pasien dan hasil anamnesis sebelumnya otomatis dipanggil kembali berdasarkan MRN."
+        "Pilih pasien yang sudah terdaftar atau buat pasien baru. Tiap kunjungan punya data "
+        "sendiri; data kunjungan sebelumnya tetap tersimpan dan terbaca."
     )
 
     patients = list_patients()
-    names = {p["mrn"]: p["name"] for p in patients}
-    consult_by_mrn = {c["mrn"]: c for c in st.session_state.patient_list}
+    all_names = {p["mrn"]: p["name"] for p in patients}
+    names = all_names
 
     options = [NEW_PATIENT] + list(names.keys())
     selected = st.selectbox(
-        "Pasien",
-        options,
+        "Pasien", options,
         format_func=lambda m: NEW_PATIENT if m == NEW_PATIENT else f"{names[m]} ({m})",
     )
-
     if selected == NEW_PATIENT:
-        default_name, default_mrn = "", st.session_state.new_mrn_default
+        default_name, default_mrn, has_visit = "", st.session_state.new_mrn_default, False
     else:
-        default_name, default_mrn = names[selected], selected
+        default_name, default_mrn, has_visit = names[selected], selected, bool(_open_visits(selected))
 
-    fresh = False
     with st.form("new_patient_form"):
         st.subheader("Pendaftaran / Konsultasi")
         p_name = st.text_input("Nama Pasien", value=default_name, key=f"form_name_{selected}")
         p_mrn = st.text_input("Medical Record Number (MRN)", value=default_mrn, key=f"form_mrn_{selected}")
         p_complaint = st.text_area("Keluhan Utama / catatan awal (opsional)", key=f"form_complaint_{selected}")
-
-        if selected != NEW_PATIENT and selected in consult_by_mrn:
-            fresh = st.checkbox(
-                "Mulai sesi baru (riwayat chat lama diganti; data pasien & hasil anamnesis tetap tersimpan)"
-            )
-
+        new_visit = has_visit and st.checkbox(
+            "Kunjungan baru (kunjungan lama tidak diubah; kalau tidak dicentang, lanjut kunjungan terakhir)",
+            key=f"form_newvisit_{selected}",
+        )
         submitted = st.form_submit_button("Mulai Konsultasi")
 
     if not submitted:
@@ -108,9 +111,9 @@ def render_new_consultation_form():
     if not name or not mrn:
         st.warning("Nama pasien dan MRN harus diisi!")
         return
-    if selected == NEW_PATIENT and mrn in names:
+    if selected == NEW_PATIENT and mrn in all_names:
         st.error(
-            f"MRN {mrn} sudah terdaftar atas nama {names[mrn]}. "
+            f"MRN {mrn} sudah terdaftar atas nama {all_names[mrn]}. "
             "Pilih pasien tersebut dari daftar, atau gunakan MRN lain."
         )
         return
@@ -118,32 +121,32 @@ def render_new_consultation_form():
     ensure_patient(mrn, name)
     if selected == NEW_PATIENT:
         audit_log.log("pasien_buat", mrn)
-    existing = consult_by_mrn.get(mrn)
 
-    if existing and not fresh:
-        # Lanjutkan roomchat yang sudah ada
+    visits = _open_visits(mrn)
+    if new_visit or not visits:
+        vno = create_visit(mrn)
+        audit_log.log("kunjungan_baru", vno)
+    else:
+        vno = visits[0]["visit_no"]
+
+    existing = next((c for c in st.session_state.patient_list if c["mrn"] == vno), None)
+    if existing:
         existing["name"] = name
         open_consultation(existing)
     else:
         greeting = (
             f"Halo, saya asisten anamnesis kardiologi. Pasien {name} siap dianamnesis. "
-            "Data pasien yang tersimpan akan dipakai otomatis. "
+            "Data kunjungan ini akan dipakai otomatis. "
             "Silakan ceritakan keluhan utama pasien atau pilih pertanyaan di bawah ini."
         )
         first_messages = [] if complaint else [{"role": "assistant", "content": greeting}]
         quick_actions = list(DEFAULT_QUICK_ACTIONS)
-
-        save_or_update_consultation(name, mrn, first_messages, quick_actions)
-        audit_log.log("roomchat_mulai", mrn, "sesi baru" if existing else "")
-        open_consultation({
-            "name": name,
-            "mrn": mrn,
-            "messages": first_messages,
-            "quick_actions": quick_actions,
-        })
+        save_or_update_consultation(name, vno, first_messages, quick_actions)
+        audit_log.log("roomchat_mulai", vno)
+        open_consultation({"name": name, "mrn": vno, "messages": first_messages,
+                           "quick_actions": quick_actions})
 
     if complaint:
-        # Jawaban AI akan di-stream di room chat (tanpa menunggu di halaman ini)
         send_user_message(complaint)
 
     st.session_state.patient_list = get_all_consultations()
@@ -157,7 +160,7 @@ def render_roomchat_view():
     col_title, col_data, col_btn = st.columns([5, 2, 1])
     with col_title:
         st.subheader(f"RoomChat: {active['name']}")
-        st.caption(f"Medical Record Number: {active['mrn']}")
+        st.caption(f"Nomor Kunjungan: {active['mrn']}")
 
     with col_data:
         if st.button("🗂 Data Pasien", key="open_patient_data", use_container_width=True):
@@ -196,17 +199,17 @@ def render_roomchat_view():
 
             st.divider()
 
-            # Hapus roomchat (data pasien & hasil anamnesis tetap tersimpan)
-            if st.button("🗑 Hapus Sesi", type="primary", use_container_width=True):
-                delete_consultation(active["mrn"])
-                audit_log.log("sesi_hapus", active["mrn"])
+            # Arsipkan: roomchat ini disembunyikan dari sidebar, tidak ada yang dihapus
+            if st.button("📦 Arsipkan Roomchat", key="btn_arsip_pasien", use_container_width=True):
+                set_visit_archived(active["mrn"], True)
+                audit_log.log("pasien_arsip", active["mrn"])
                 st.session_state.active_patient = None
                 st.session_state.messages = []
                 st.session_state.quick_actions = []
                 st.session_state.pending_input = None
                 st.session_state.patient_list = get_all_consultations()
                 st.rerun()
-            st.caption("Menghapus sesi hanya menghapus chat. Data pasien tetap tersimpan.")
+            st.caption("Roomchat disembunyikan dari sidebar; data tetap ada di Data Pasien dan bisa diaktifkan kembali.")
 
     render_context_panel(active["mrn"])
     render_chat_room()
@@ -219,3 +222,5 @@ elif st.session_state.active_patient is None:
     render_new_consultation_form()
 else:
     render_roomchat_view()
+
+sync_url()

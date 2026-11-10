@@ -3,7 +3,6 @@ import streamlit as st
 from components.nav import go_to_patient_data, open_consultation
 from auth.session import close_account_page
 from components.user_box import render_user_box
-from database import list_patients
 def render_sidebar():
     st.sidebar.title("Pengaturan & Pasien")
     if "patient_list" not in st.session_state:
@@ -40,24 +39,14 @@ def render_sidebar():
         else:
             st.sidebar.warning("API Key belum diatur di .env maupun sidebar.", icon="⚠️")
     st.sidebar.divider()
-    # --- DATA PASIEN (halaman data per MRN) ---
+    # --- DATA PASIEN: satu tombol; pencarian pasien dilakukan di halamannya ---
     st.sidebar.subheader("🗂 Data Pasien")
-    patients = list_patients()
     viewing_data = st.session_state.get("view") == "patient_data"
-    current_mrn = st.session_state.get("data_mrn")
-    with st.sidebar.expander("Buka data pasien", expanded=viewing_data):
-        if st.button("➕ Tambah / Kelola Data Pasien", key="sb_data_home", use_container_width=True):
-            close_account_page()
-            go_to_patient_data()
-            st.rerun()
-        if not patients:
-            st.info("Belum ada data pasien.")
-        for p in patients:
-            marker = "▶ " if (viewing_data and p["mrn"] == current_mrn) else "📄 "
-            if st.button(f"{marker}{p['name']} ({p['mrn']})", key=f"sb_data_{p['mrn']}", use_container_width=True):
-                close_account_page()
-                go_to_patient_data(p["mrn"])
-                st.rerun()
+    if st.sidebar.button("Data Pasien", key="sb_data_home", use_container_width=True,
+                         type="primary" if viewing_data else "secondary"):
+        close_account_page()
+        go_to_patient_data()
+        st.rerun()
     st.sidebar.divider()
     # --- ROOMCHAT ---
     st.sidebar.subheader("💬 Roomchat")

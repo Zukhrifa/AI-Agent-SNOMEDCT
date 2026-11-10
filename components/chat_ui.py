@@ -380,10 +380,13 @@ def _process_pending(slot):
     st.session_state.pending_input = None
 
     if raw.strip():
+        facts = " ".join(conversation_texts(list(history) + [{"role": "user", "content": pending}])) \
+            + " " + build_patient_context(patient["mrn"], history=False)
         result = parse_response(
             raw,
             get_candidates(pending, history),
             force_final=pending.startswith(CONTROL_PREFIX),
+            facts=facts,
         )
         text = result["text"] or "Maaf, respons AI kosong. Silakan kirim ulang pesan Anda."
 

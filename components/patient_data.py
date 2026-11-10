@@ -3,16 +3,22 @@ from datetime import date, datetime
 import streamlit as st
 from auth import audit_log
 
-from components.nav import go_to_chat, open_roomchat_for_mrn
+from components.nav import go_to_chat, go_to_patient_data, open_roomchat_for_mrn
 from database import (
     add_supporting,
+    create_visit,
     delete_supporting,
     ensure_patient,
     get_all_consultations,
+    get_consultation,
     get_patient,
+    get_visit,
     list_anamnesis_results,
-    list_patients,
+    list_patient_overview,
     list_supporting,
+    list_visits,
+    patient_mrn_of,
+    set_visit_archived,
     update_patient,
     update_patient_name,
 )
@@ -80,7 +86,7 @@ def _tab_identity(mrn: str, patient: dict):
         audit_log.log("identitas_ubah", mrn, "identitas pasien")
 
         active = st.session_state.get("active_patient")
-        if active and active.get("mrn") == mrn:
+        if active and patient_mrn_of(active.get("mrn")) == mrn:
             active["name"] = name.strip()
         _refresh_consultations()
         st.success("Identitas tersimpan.")
@@ -331,15 +337,51 @@ def _tab_logs(mrn: str):
         st.dataframe(audit_log.table_rows(logs, with_mrn=False), use_container_width=True, hide_index=True)
     else:
         st.info("Belum ada aktivitas tercatat.")
-def render_patient_data_page():
-    st.title("🗂 Data Pasien")
-    st.caption("Data tersimpan per MRN dan otomatis dipakai AI di roomchat pasien yang sama.")
+def _tab_chat_history(mrn: str):
+    """Riwayat roomchat (baca-saja), termasuk milik pasien yang diarsipkan."""
+    consult = get_consultation(mrn)
+    if not consult or not consult["messages"]:
+        st.info("Belum ada riwayat roomchat untuk pasien ini.")
+        return
+    audit_log.log_once("riwayat_lihat", mrn)
+    st.caption("Hanya baca. Untuk melanjutkan chat, buka roomchat (pasien aktif).")
+    for m in consult["messages"]:
+        with st.chat_message("user" if m.get("role") == "user" else "assistant"):
+            st.markdown(str(m.get("content", "")))
 
-    patients = list_patients()
-    names = {p["mrn"]: p["name"] for p in patients}
-    mrns = list(names.keys())
 
-    with st.expander("➕ Tambah pasien baru", expanded=not mrns):
+def _fmt_date(iso) -> str:
+    try:
+        return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except ValueError:
+        return "—"
+
+
+def _snippet(text: str, n: int = 220) -> str:
+    text = " ".join(str(text or "").split())
+    return (text[:n] + "…") if len(text) > n else (text or "Belum ada hasil anamnesis AI.")
+
+
+SORTS = {
+    "Nama": lambda r: r["name"].lower(),
+    "No. RM": lambda r: r["mrn"],
+}
+
+
+def _page_patients():
+    st.caption("Klik **Cek kunjungan** untuk melihat riwayat kunjungan pasien.")
+    rows = list_patient_overview()
+    names = {r["mrn"]: r["name"] for r in rows}
+
+    c1, c2, c3 = st.columns([4, 3, 1])
+    query = c1.text_input("🔍 Cari pasien (nama atau MRN)", key="data_search").strip().lower()
+    order = c2.selectbox("Urutkan", list(SORTS), key="data_sort")
+    c3.write("")
+    if c3.button("← Kembali", key="dp_back", use_container_width=True):
+        go_to_chat()
+        st.rerun()
+
+    with st.expander("➕ Tambah pasien baru", expanded=not names):
         with st.form("form_new_patient_data", clear_on_submit=True):
             new_name = st.text_input("Nama Pasien")
             new_mrn = st.text_input("Medical Record Number (MRN)")
@@ -353,63 +395,154 @@ def render_patient_data_page():
             else:
                 ensure_patient(m, n)
                 audit_log.log("pasien_buat", m)
-                st.session_state.data_mrn = m
-                st.session_state.pop("data_patient_select", None)
+                go_to_patient_data(m)
                 st.rerun()
 
-    if not mrns:
+    rows = sorted(
+        (r for r in rows
+         if not query or query in r["name"].lower() or query in r["mrn"].lower()),
+        key=SORTS[order],
+    )
+    if not rows:
+        st.info("Tidak ada pasien pada tampilan ini.")
         return
 
-    current = st.session_state.get("data_mrn")
-    if current not in mrns:
-        current = mrns[0]
-    mrn = st.selectbox(
-        "Pilih pasien", mrns, index=mrns.index(current),
-        format_func=lambda m: f"{names[m]} ({m})", key="data_patient_select",
-    )
-    st.session_state.data_mrn = mrn
+    widths = [3, 2, 2, 2, 2]
+    with st.container(height=460, border=True):
+        for col, label in zip(st.columns(widths), ["Nama", "No. RM", "Jenis kelamin", "Tanggal lahir", ""]):
+            col.caption(label)
+        for r in rows:
+            cols = st.columns(widths)
+            cols[0].write(r["name"])
+            cols[1].write(r["mrn"])
+            cols[2].write(r["sex"] or "—")
+            cols[3].write(_fmt_date(r["birth_date"]))
+            if cols[4].button("Cek kunjungan", key=f"cek_{r['mrn']}", use_container_width=True):
+                go_to_patient_data(r["mrn"])
+                st.rerun()
 
+
+def _page_visits(mrn: str):
     patient = get_patient(mrn)
     if not patient:
-        st.error("Data pasien tidak ditemukan.")
-        return
+        go_to_patient_data()
+        st.rerun()
     audit_log.log_once("pasien_lihat", mrn)
-
     age = calc_age(patient.get("birth_date"))
-    info = f"MRN: {mrn}"
-    if age is not None:
-        info += f" • {age} tahun"
-    if patient.get("sex"):
-        info += f" • {patient['sex']}"
+    info = " • ".join(x for x in (f"MRN: {mrn}", f"{age} tahun" if age is not None else "",
+                                  patient.get("sex") or "") if x)
 
-    col_info, col_chat, col_back = st.columns([6, 2, 2])
+    col_info, col_new, col_back = st.columns([6, 2, 2])
     with col_info:
         st.subheader(patient["name"])
         st.caption(info)
-    with col_chat:
-        if st.button("💬 Buka Roomchat", key="dp_open_chat", use_container_width=True):
-            open_roomchat_for_mrn(mrn)
+    with col_new:
+        if st.button("➕ Kunjungan baru", key="dp_new_visit", use_container_width=True):
+            vno = create_visit(mrn)
+            audit_log.log("kunjungan_baru", vno)
+            go_to_patient_data(vno)
             st.rerun()
     with col_back:
-        if st.button("← Kembali", key="dp_back", use_container_width=True):
-            go_to_chat()
+        if st.button("← Kembali", key="dp_back_list", use_container_width=True):
+            go_to_patient_data()
             st.rerun()
 
-    tabs = st.tabs([
-        "Identitas", "Keluhan Utama (SNOMED)", "Anamnesis",
-        "Pemeriksaan Fisik", "Data Penunjang", "Hasil Anamnesis AI", "Riwayat Aktivitas",
-    ])
-    with tabs[0]:
+    with st.expander("Identitas pasien"):
         _tab_identity(mrn, patient)
+
+    st.markdown("#### Riwayat kunjungan")
+    visits = list_visits(mrn)
+    if not visits:
+        st.info("Belum ada kunjungan. Tekan **Kunjungan baru**.")
+    for v in visits:
+        with st.container(border=True):
+            c_text, c_btn = st.columns([6, 1])
+            badges = [b for b in ("📦 roomchat diarsipkan" if v["archived"] else "",
+                                  "✅ disetujui" if v["approved"] else ("belum diverifikasi" if v["summary"] else "")) if b]
+            c_text.markdown(f"**{_fmt_date(v['visit_date'])}** · `{v['visit_no']}`" + "".join(f" · {b}" for b in badges))
+            c_text.caption(_snippet(v["summary"]))
+            if c_btn.button("Buka", key=f"vopen_{v['visit_no']}", use_container_width=True):
+                go_to_patient_data(v["visit_no"])
+                st.rerun()
+
+
+def _previous_visits_block(mrn: str, vno: str):
+    others = [v for v in list_visits(mrn) if v["visit_no"] != vno]
+    if not others:
+        return
+    with st.expander(f"Kunjungan lain pasien ini ({len(others)}) — hanya baca"):
+        for v in others:
+            findings = (get_visit(v["visit_no"]) or {}).get("confirmed_findings") or []
+            st.markdown(f"**{_fmt_date(v['visit_date'])}** · `{v['visit_no']}`")
+            st.caption(_snippet(v["summary"], 400))
+            if findings:
+                st.markdown("Temuan SNOMED: " + "; ".join(
+                    f"{f.get('term', '')} `{f.get('conceptId', '')}`" for f in findings[:10]))
+            if st.button("Buka kunjungan ini", key=f"vprev_{v['visit_no']}"):
+                go_to_patient_data(v["visit_no"])
+                st.rerun()
+            st.divider()
+
+
+def _page_visit(mrn: str, vno: str):
+    visit, patient = get_visit(vno), get_patient(vno)
+    if not visit or not patient:
+        go_to_patient_data(mrn)
+        st.rerun()
+    audit_log.log_once("pasien_lihat", vno)
+    archived = bool(visit.get("archived"))
+
+    col_info, col_chat, col_arc, col_back = st.columns([5, 2, 2, 2])
+    with col_info:
+        st.subheader(patient["name"])
+        st.caption(f"Kunjungan {_fmt_date(visit['visit_date'])} • No. {vno}" + (" • Roomchat diarsipkan" if archived else ""))
+    with col_chat:
+        if not archived and st.button("💬 Buka Roomchat", key="dp_open_chat", use_container_width=True):
+            open_roomchat_for_mrn(vno)
+            st.rerun()
+    with col_arc:
+        if st.button("♻ Aktifkan roomchat" if archived else "📦 Arsipkan roomchat", key="dp_archive",
+                     use_container_width=True):
+            set_visit_archived(vno, not archived)
+            audit_log.log("pasien_aktif" if archived else "pasien_arsip", vno)
+            if not archived and (st.session_state.get("active_patient") or {}).get("mrn") == vno:
+                st.session_state.active_patient = None
+                st.session_state.messages = []
+                st.session_state.quick_actions = []
+                st.session_state.pending_input = None
+            _refresh_consultations()
+            st.rerun()
+    with col_back:
+        if st.button("← Kembali", key="dp_back_visits", use_container_width=True):
+            go_to_patient_data(mrn)
+            st.rerun()
+
+    _previous_visits_block(mrn, vno)
+
+    tabs = st.tabs(["Keluhan Utama (SNOMED)", "Anamnesis", "Pemeriksaan Fisik", "Data Penunjang",
+                    "Hasil Anamnesis AI", "Riwayat Aktivitas", "Riwayat Roomchat"])
+    with tabs[0]:
+        _tab_chief_complaint(vno, patient)
     with tabs[1]:
-        _tab_chief_complaint(mrn, patient)
+        _tab_anamnesis(vno, patient)
     with tabs[2]:
-        _tab_anamnesis(mrn, patient)
+        _tab_physical(vno, patient)
     with tabs[3]:
-        _tab_physical(mrn, patient)
+        _tab_supporting(vno)
     with tabs[4]:
-        _tab_supporting(mrn)
+        _tab_results(vno, patient)
     with tabs[5]:
-        _tab_results(mrn, patient)
+        audit_log.live(_tab_logs)(vno)
     with tabs[6]:
-        audit_log.live(_tab_logs)(mrn)
+        _tab_chat_history(vno)
+
+
+def render_patient_data_page():
+    st.title("🗂 Data Pasien")
+    mrn, vno = st.session_state.get("data_mrn"), st.session_state.get("data_visit")
+    if mrn and vno:
+        _page_visit(mrn, vno)
+    elif mrn:
+        _page_visits(mrn)
+    else:
+        _page_patients()

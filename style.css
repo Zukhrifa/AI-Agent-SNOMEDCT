@@ -21,6 +21,21 @@ body, .stApp {
     color: #2563eb;
 }
 
+/* Tombol Hapus Sesi (merah) */
+.st-key-btn_hapus_sesi .stButton > button {
+    background-color: #dc2626;
+    border-color: #dc2626;
+    color: #ffffff;
+    font-weight: 600;
+}
+.st-key-btn_hapus_sesi .stButton > button:hover,
+.st-key-btn_hapus_sesi .stButton > button:active,
+.st-key-btn_hapus_sesi .stButton > button:focus:not(:active) {
+    background-color: #b91c1c;
+    border-color: #b91c1c;
+    color: #ffffff;
+}
+
 /* Tombol Utama (Primary Blue) */
 div[data-testid="stFormSubmitButton"] > button {
     background-color: #2563eb !important;

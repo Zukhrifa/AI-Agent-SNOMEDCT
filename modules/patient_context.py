@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from database import get_patient, list_anamnesis_results, list_supporting
+from database import get_patient, list_anamnesis_results, list_supporting, previous_visit_results
 
 MAX_CONTEXT_CHARS = 3500
 MAX_SUPPORTING_ITEMS = 8
@@ -62,7 +62,7 @@ def format_vitals(pe: dict) -> str:
     return ", ".join(parts)
 
 
-def build_patient_context(mrn: str) -> str:
+def build_patient_context(mrn: str, history: bool = True) -> str:
     """Ringkasan data pasien tersimpan (untuk konteks AI). '' jika belum ada data."""
     patient = get_patient(mrn)
     if not patient:
@@ -123,6 +123,16 @@ def build_patient_context(mrn: str) -> str:
     if previous:
         summary = " ".join(previous[0]["summary"].split())[:600]
         lines.append(f"Kesimpulan anamnesis yang disetujui sebelumnya ({previous[0]['created_at']}): {summary}")
+
+    if history:
+        old = previous_visit_results(mrn, limit=2)
+        if old:
+            lines.append("RIWAYAT KUNJUNGAN SEBELUMNYA (rujukan saja, BUKAN keluhan kunjungan ini; "
+                         "konfirmasi ulang ke pasien):")
+            for r in old:
+                summary = " ".join(str(r["summary"]).split())[:300]
+                terms = "; ".join(t for t in r["terms"] if t)[:200]
+                lines.append(f"- {r['visit_date']}: {summary}" + (f" | Temuan: {terms}" if terms else ""))
 
     text = "\n".join(lines).strip()
     return text[:MAX_CONTEXT_CHARS]

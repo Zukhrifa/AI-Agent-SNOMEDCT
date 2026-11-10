@@ -251,6 +251,9 @@ def _get_index() -> dict:
     return {"chunks": chunks, "tf": tfs, "len": lengths, "df": df, "avg": avg}
 
 
+MIN_REL_SCORE = 0.4  # skor minimal relatif terhadap hasil terbaik
+
+
 def search(query: str, k: int = 4) -> list:
     """Kutipan paling relevan: [{'title','page','section','excerpt','score'}]. [] bila tidak ada."""
     idx = _get_index()
@@ -259,18 +262,23 @@ def search(query: str, k: int = 4) -> list:
     if not terms or not n_docs:
         return []
     scored = []
+    need = max(1, math.ceil(len(terms) * 0.5))  # minimal separuh kata kunci harus ada di kutipan
     for i, (tf, dl) in enumerate(zip(idx["tf"], idx["len"])):
-        score = 0.0
+        score, hit = 0.0, 0
         for t in terms:
             f = tf.get(t)
             if not f:
                 continue
+            hit += 1
             n = idx["df"][t]
             idf = math.log(1 + (n_docs - n + 0.5) / (n + 0.5))
             score += idf * f * (BM25_K1 + 1) / (f + BM25_K1 * (1 - BM25_B + BM25_B * dl / idx["avg"]))
-        if score > 0:
+        if score > 0 and hit >= need:
             scored.append((score, i))
     scored.sort(reverse=True)
+    if scored:  # buang yang skornya jauh di bawah hasil terbaik (tidak relevan)
+        top = scored[0][0]
+        scored = [x for x in scored if x[0] >= MIN_REL_SCORE * top]
     results = []
     for score, i in scored[:k]:
         c = idx["chunks"][i]

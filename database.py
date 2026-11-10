@@ -49,7 +49,7 @@ JSON_FIELDS = {
 PLAIN_FIELDS = ("name", "birth_date", "sex")
 _PATIENT_COLS = (
     "mrn", "name", "birth_date", "sex", "chief_complaints", "anamnesis",
-    "physical_exam", "confirmed_findings", "created_at", "updated_at",
+    "physical_exam", "confirmed_findings", "created_at", "updated_at", "archived",
 )
 
 
@@ -219,6 +219,20 @@ _SCHEMA = [
             created_at TIMESTAMP DEFAULT ({_NOW})
         )
         ''',
+        f'''
+        CREATE TABLE IF NOT EXISTS visits (
+            visit_no TEXT PRIMARY KEY,
+            mrn TEXT NOT NULL,
+            visit_date TEXT NOT NULL,
+            archived INTEGER DEFAULT 0,
+            chief_complaints TEXT,
+            anamnesis TEXT,
+            physical_exam TEXT,
+            confirmed_findings TEXT,
+            created_at TIMESTAMP DEFAULT ({_NOW}),
+            updated_at TIMESTAMP DEFAULT ({_NOW})
+        )
+        ''',
     )
 ]
 
@@ -232,20 +246,50 @@ def _add_column_if_missing(table: str, column: str, ddl: str):
             raise
 
 
+def _migrate_visits():
+    """Pasien lama tanpa kunjungan -> kunjungan K1 (data klinis, chat, penunjang, hasil AI
+    dipindah ke nomor kunjungan). Aman dijalankan berulang."""
+    rows = _query(
+        "SELECT mrn, chief_complaints, anamnesis, physical_exam, confirmed_findings, created_at "
+        "FROM patients WHERE mrn NOT IN (SELECT mrn FROM visits)"
+    )
+    for mrn, cc, an, pe, cf, created in rows:
+        vno = f"{mrn}-K1"
+        _write([
+            ("INSERT INTO visits (visit_no, mrn, visit_date, chief_complaints, anamnesis, "
+             "physical_exam, confirmed_findings) "
+             "VALUES (?, ?, COALESCE(?, date('now','+7 hours')), ?, ?, ?, ?)",
+             (vno, mrn, (created or "")[:10] or None, cc, an, pe, cf)),
+            ("UPDATE consultations SET medical_record_no = ? WHERE medical_record_no = ?", (vno, mrn)),
+            ("UPDATE patient_supporting SET mrn = ? WHERE mrn = ?", (vno, mrn)),
+            ("UPDATE anamnesis_results SET mrn = ? WHERE mrn = ?", (vno, mrn)),
+        ])
+
+
 def init_db():
     _write(_SCHEMA)
     _add_column_if_missing("patients", "confirmed_findings", "TEXT")
+    _add_column_if_missing("patients", "archived", "INTEGER DEFAULT 0")
+    _add_column_if_missing("visits", "archived", "INTEGER DEFAULT 0")
     _add_column_if_missing("anamnesis_results", "approved", "INTEGER DEFAULT 0")
     _write([
         ("CREATE INDEX IF NOT EXISTS idx_consult_mrn ON consultations(medical_record_no)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_supporting_mrn ON patient_supporting(mrn)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_results_mrn ON anamnesis_results(mrn)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_visits_mrn ON visits(mrn)", ()),
         # Pasien dari roomchat lama dimasukkan ke tabel patients
         (
             "INSERT OR IGNORE INTO patients (mrn, name) "
-            "SELECT medical_record_no, patient_name FROM consultations",
+            "SELECT medical_record_no, patient_name FROM consultations "
+            "WHERE medical_record_no NOT IN (SELECT visit_no FROM visits)",
             (),
         ),
+    ])
+    _migrate_visits()
+    # Arsip kini per roomchat (kunjungan), bukan per pasien: pindahkan arsip lama, sekali jalan
+    _write([
+        ("UPDATE visits SET archived = 1 WHERE mrn IN (SELECT mrn FROM patients WHERE archived = 1)", ()),
+        ("UPDATE patients SET archived = 0 WHERE archived = 1", ()),
     ])
 
 
@@ -257,7 +301,7 @@ def backend_info() -> dict:
 
 def table_counts() -> dict:
     counts = {}
-    for table in ("consultations", "patients", "patient_supporting", "anamnesis_results"):
+    for table in ("consultations", "patients", "visits", "patient_supporting", "anamnesis_results"):
         counts[table] = _query(f"SELECT COUNT(*) FROM {table}")[0][0]
     return counts
 
@@ -285,12 +329,14 @@ def save_or_update_consultation(patient_name: str, medical_record_no: str, messa
 
 
 def get_all_consultations():
+    """Roomchat yang tidak diarsipkan (roomchat diarsipkan tidak tampil di sidebar)."""
     if not USE_TURSO and not os.path.exists(DB_FILE):
         return []
 
     rows = _query('''
         SELECT id, patient_name, medical_record_no, messages, quick_actions, created_at
         FROM consultations
+        WHERE medical_record_no NOT IN (SELECT visit_no FROM visits WHERE archived = 1)
         ORDER BY created_at DESC, id DESC
     ''')
 
@@ -312,9 +358,35 @@ def delete_consultation(mrn):
     _write([("DELETE FROM consultations WHERE medical_record_no = ?", (mrn,))])
 
 
-def update_patient_name(mrn, new_name):
+def get_consultation(mrn):
+    """Roomchat satu MRN (aktif maupun diarsipkan), untuk tampilan baca-saja di Data Pasien."""
+    rows = _query(
+        "SELECT id, patient_name, medical_record_no, messages, quick_actions, created_at "
+        "FROM consultations WHERE medical_record_no = ? ORDER BY id DESC LIMIT 1", (mrn,),
+    )
+    if not rows:
+        return None
+    r = rows[0]
+    return {
+        "id": r[0], "name": r[1], "mrn": r[2],
+        "messages": json.loads(r[3]) if r[3] else [],
+        "quick_actions": json.loads(r[4]) if r[4] else [],
+        "created_at": r[5],
+    }
+
+
+def set_visit_archived(visit_no: str, archived: bool):
+    """Arsipkan/aktifkan roomchat satu kunjungan. Tidak ada data yang dihapus; hanya
+    disembunyikan dari sidebar. Pasien sendiri selalu aktif."""
+    _write([(f"UPDATE visits SET archived = ?, updated_at = {_NOW} WHERE visit_no = ?",
+             (1 if archived else 0, visit_no))])
+
+
+def update_patient_name(key, new_name):
+    mrn = patient_mrn_of(key)
     _write([
-        ("UPDATE consultations SET patient_name = ? WHERE medical_record_no = ?", (new_name, mrn)),
+        ("UPDATE consultations SET patient_name = ? WHERE medical_record_no IN "
+         "(SELECT visit_no FROM visits WHERE mrn = ?)", (new_name, mrn)),
         ("INSERT OR IGNORE INTO patients (mrn, name) VALUES (?, ?)", (mrn, new_name)),
         (f"UPDATE patients SET name = ?, updated_at = {_NOW} WHERE mrn = ?", (new_name, mrn)),
     ])
@@ -323,15 +395,103 @@ def update_patient_name(mrn, new_name):
 # ---------------------------------------------------------------------------
 # Data pasien
 # ---------------------------------------------------------------------------
-def _decode_patient(row) -> dict:
-    data = dict(zip(_PATIENT_COLS, row))
+def _decode_row(cols, row) -> dict:
+    data = dict(zip(cols, row))
     for field, typ in JSON_FIELDS.items():
+        if field not in data:
+            continue
         try:
             value = json.loads(data[field]) if data[field] else typ()
         except Exception:
             value = typ()
         data[field] = value if isinstance(value, typ) else typ()
     return data
+
+
+def _decode_patient(row) -> dict:
+    return _decode_row(_PATIENT_COLS, row)
+
+
+# ---------------------------------------------------------------------------
+# Kunjungan. Nomor kunjungan = f"{MRN}-K{n}" dan dipakai sebagai kunci data klinis
+# (kolom `mrn` di consultations, patient_supporting, anamnesis_results).
+# ---------------------------------------------------------------------------
+_VISIT_COLS = ("visit_no", "mrn", "visit_date", "archived") + tuple(JSON_FIELDS) + ("created_at", "updated_at")
+
+
+def get_visit(visit_no):
+    if not visit_no:
+        return None
+    rows = _query(f"SELECT {', '.join(_VISIT_COLS)} FROM visits WHERE visit_no = ?", (visit_no,))
+    return _decode_row(_VISIT_COLS, rows[0]) if rows else None
+
+
+def patient_mrn_of(key):
+    """MRN pasien dari nomor kunjungan; jika key sudah MRN, dikembalikan apa adanya."""
+    visit = get_visit(key)
+    return visit["mrn"] if visit else key
+
+
+def create_visit(mrn: str, visit_date: str = None) -> str:
+    n = _query("SELECT COUNT(*) FROM visits WHERE mrn = ?", (mrn,))[0][0] + 1
+    while _query("SELECT 1 FROM visits WHERE visit_no = ?", (f"{mrn}-K{n}",)):
+        n += 1
+    vno = f"{mrn}-K{n}"
+    _write([(
+        "INSERT INTO visits (visit_no, mrn, visit_date) VALUES (?, ?, COALESCE(?, date('now','+7 hours')))",
+        (vno, mrn, visit_date),
+    )])
+    return vno
+
+
+def list_visits(mrn: str) -> list:
+    """Kunjungan pasien (terbaru dulu) + ringkasan hasil anamnesis AI tiap kunjungan."""
+    sub = "FROM anamnesis_results r WHERE r.mrn = v.visit_no ORDER BY r.approved DESC, r.id DESC LIMIT 1"
+    rows = _query(
+        f"SELECT v.visit_no, v.visit_date, COALESCE(v.archived, 0), "
+        f"(SELECT r.summary {sub}), (SELECT r.approved {sub}) "
+        "FROM visits v WHERE v.mrn = ? ORDER BY v.visit_date DESC, v.created_at DESC, v.visit_no DESC",
+        (mrn,),
+    )
+    return [{"visit_no": r[0], "visit_date": r[1], "archived": bool(r[2]),
+             "summary": r[3] or "", "approved": bool(r[4])} for r in rows]
+
+
+def list_patient_overview() -> list:
+    rows = _query(
+        "SELECT p.mrn, p.name, p.birth_date, p.sex, COUNT(v.visit_no) "
+        "FROM patients p LEFT JOIN visits v ON v.mrn = p.mrn "
+        "GROUP BY p.mrn ORDER BY p.name COLLATE NOCASE"
+    )
+    return [{"mrn": r[0], "name": r[1], "birth_date": r[2], "sex": r[3],
+             "visits": r[4]} for r in rows]
+
+
+def previous_visit_results(visit_no: str, limit: int = 2) -> list:
+    """Kesimpulan yang disetujui dari kunjungan SEBELUM kunjungan ini (konteks AI)."""
+    visit = get_visit(visit_no)
+    if not visit:
+        return []
+    rows = _query(
+        "SELECT v.visit_date, r.summary, r.codes FROM visits v "
+        "JOIN anamnesis_results r ON r.mrn = v.visit_no AND r.approved = 1 "
+        "WHERE v.mrn = ? AND v.visit_no != ? AND v.created_at <= ? "
+        "ORDER BY v.created_at DESC, r.id DESC",
+        (visit["mrn"], visit_no, visit["created_at"]),
+    )
+    out, seen = [], set()
+    for date_, summary, codes in rows:
+        if date_ in seen:
+            continue
+        seen.add(date_)
+        try:
+            terms = [c.get("term", "") for c in json.loads(codes or "[]")]
+        except Exception:
+            terms = []
+        out.append({"visit_date": date_, "summary": summary, "terms": terms})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def ensure_patient(mrn: str, name: str):
@@ -345,9 +505,20 @@ def ensure_patient(mrn: str, name: str):
     )])
 
 
-def get_patient(mrn: str):
-    rows = _query(f"SELECT {', '.join(_PATIENT_COLS)} FROM patients WHERE mrn = ?", (mrn,))
-    return _decode_patient(rows[0]) if rows else None
+def get_patient(key: str):
+    """key = nomor kunjungan -> identitas + data klinis kunjungan itu.
+    key = MRN -> identitas saja (data klinis kosong)."""
+    visit = get_visit(key)
+    rows = _query(f"SELECT {', '.join(_PATIENT_COLS)} FROM patients WHERE mrn = ?",
+                  (visit["mrn"] if visit else key,))
+    if not rows:
+        return None
+    patient = _decode_patient(rows[0])
+    clinical = visit or {f: typ() for f, typ in JSON_FIELDS.items()}
+    patient.update({f: clinical[f] for f in JSON_FIELDS})
+    patient["visit_no"] = visit["visit_no"] if visit else None
+    patient["visit_date"] = visit["visit_date"] if visit else None
+    return patient
 
 
 def list_patients() -> list:
@@ -355,26 +526,29 @@ def list_patients() -> list:
     return [_decode_patient(r) for r in rows]
 
 
-def update_patient(mrn: str, **fields):
-    """Perbarui sebagian kolom pasien. Kolom yang diizinkan: name, birth_date, sex,
-    chief_complaints, anamnesis, physical_exam, confirmed_findings."""
-    allowed = set(PLAIN_FIELDS) | set(JSON_FIELDS)
+def _update_row(table: str, pk: str, key: str, fields: dict):
     sets, values = [], []
-    for key, value in fields.items():
-        if key not in allowed:
-            continue
-        if key in JSON_FIELDS:
+    for name, value in fields.items():
+        if name in JSON_FIELDS:
             value = json.dumps(value, ensure_ascii=False)
-        sets.append(f"{key} = ?")
+        sets.append(f"{name} = ?")
         values.append(value)
-    if not sets:
-        return
-    sets.append(f"updated_at = {_NOW}")
+    if sets:
+        sets.append(f"updated_at = {_NOW}")
+        _write([(f"UPDATE {table} SET {', '.join(sets)} WHERE {pk} = ?", (*values, key))])
 
-    _write([
-        ("INSERT OR IGNORE INTO patients (mrn, name) VALUES (?, ?)", (mrn, fields.get("name") or mrn)),
-        (f"UPDATE patients SET {', '.join(sets)} WHERE mrn = ?", (*values, mrn)),
-    ])
+
+def update_patient(key: str, **fields):
+    """Perbarui data. Identitas (name, birth_date, sex) -> patients.
+    Data klinis (chief_complaints, anamnesis, physical_exam, confirmed_findings) -> kunjungan `key`."""
+    ident = {k: v for k, v in fields.items() if k in PLAIN_FIELDS}
+    clinical = {k: v for k, v in fields.items() if k in JSON_FIELDS}
+    mrn = patient_mrn_of(key)
+    if ident:
+        _write([("INSERT OR IGNORE INTO patients (mrn, name) VALUES (?, ?)", (mrn, fields.get("name") or mrn))])
+        _update_row("patients", "mrn", mrn, ident)
+    if clinical and get_visit(key):
+        _update_row("visits", "visit_no", key, clinical)
 
 
 # ---------------------------------------------------------------------------

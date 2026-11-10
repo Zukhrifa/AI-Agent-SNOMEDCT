@@ -1,20 +1,67 @@
 import streamlit as st
 from auth import audit_log
 
-from database import get_all_consultations, get_patient, save_or_update_consultation
+from database import get_all_consultations, get_patient, get_visit, save_or_update_consultation
 from modules.ai_agent import DEFAULT_QUICK_ACTIONS
 
 
-def go_to_patient_data(mrn: str = None):
-    """Pindah ke halaman Data Pasien (opsional: langsung ke MRN tertentu)."""
+def go_to_patient_data(key: str = None):
+    """Pindah ke Data Pasien. key kosong -> daftar pasien; key = MRN -> daftar kunjungan;
+    key = nomor kunjungan -> detail kunjungan."""
     st.session_state.view = "patient_data"
-    if mrn:
-        st.session_state.data_mrn = mrn
-    st.session_state.pop("data_patient_select", None)
+    visit = get_visit(key) if key else None
+    st.session_state.data_mrn = (visit["mrn"] if visit else key) or None
+    st.session_state.data_visit = key if visit else None
 
 
 def go_to_chat():
     st.session_state.view = "chat"
+
+
+# ---------------------------------------------------------------------------
+# Sinkron halaman <-> URL, agar tombol Kembali/Maju browser berfungsi di dalam aplikasi.
+# Parameter URL: v=halaman, m=MRN pasien, k=nomor kunjungan, c=roomchat aktif.
+# ---------------------------------------------------------------------------
+_KEYS = ("v", "m", "k", "c")
+
+
+def _state() -> tuple:
+    ss = st.session_state
+    return (ss.get("view", "chat"), ss.get("data_mrn"), ss.get("data_visit"),
+            (ss.get("active_patient") or {}).get("mrn"))
+
+
+def _url_state() -> tuple:
+    qp = st.query_params
+    return (qp.get("v", "chat"), qp.get("m"), qp.get("k"), qp.get("c"))
+
+
+def _apply(state: tuple):
+    ss = st.session_state
+    ss.view, ss.data_mrn, ss.data_visit = state[0], state[1], state[2]
+    if state[3] != (ss.get("active_patient") or {}).get("mrn"):
+        pat = next((c for c in ss.get("patient_list", []) if c["mrn"] == state[3]), None)
+        ss.active_patient = pat
+        ss.messages = pat.get("messages", []) if pat else []
+        ss.quick_actions = pat.get("quick_actions", []) if pat else []
+        ss.pending_input = None
+
+
+def sync_url():
+    """Panggil sebelum render halaman dan sekali lagi di akhir app.py.
+    URL berubah (Kembali/Maju browser, tautan, refresh) -> halaman mengikuti URL.
+    Halaman berubah (tombol di aplikasi) -> URL ditulis (menambah riwayat browser)."""
+    ss = st.session_state
+    url, cur, last = _url_state(), _state(), ss.get("_url_last")
+    changed = url != ("chat", None, None, None) if last is None else url != last
+    if changed:
+        _apply(url)
+        ss["_url_last"] = url
+        return
+    if cur != url:
+        st.query_params.from_dict(
+            {k: v for k, v in zip(_KEYS, cur) if v and not (k == "v" and v == "chat")})
+    ss["_url_last"] = cur
 
 
 def open_consultation(pat: dict):
@@ -28,7 +75,7 @@ def open_consultation(pat: dict):
 
 
 def open_roomchat_for_mrn(mrn: str):
-    """Buka roomchat milik MRN; jika belum ada, buat roomchat baru dengan sapaan awal."""
+    """Buka roomchat milik nomor kunjungan (key); jika belum ada, buat roomchat baru dengan sapaan awal."""
     for consultation in st.session_state.get("patient_list", []):
         if consultation["mrn"] == mrn:
             open_consultation(consultation)
