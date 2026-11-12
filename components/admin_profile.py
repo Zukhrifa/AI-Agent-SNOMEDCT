@@ -3,6 +3,7 @@ import streamlit as st
 
 from auth import service
 from auth.session import close_account_page, current_user, logout, refresh_user
+from modules.ai_agent import MODEL_NAME, PROVIDERS, get_user_llm, test_user_llm
 
 
 def _password_form(user: dict, key: str, forced: bool = False) -> None:
@@ -39,6 +40,45 @@ def render_force_password_change(user: dict) -> None:
             st.rerun()
 
 
+def _llm_section() -> None:
+    """AI bawaan sistem untuk semua pengguna; API key pribadi (Gemini/OpenAI/Claude) hanya berlaku
+    untuk akun ini dan hanya di memori sesi (tidak ditulis ke database)."""
+    st.subheader("🔑 Penyedia AI & API Key")
+    cfg = get_user_llm()
+    if cfg:
+        st.success(f"Memakai {PROVIDERS[cfg['provider']]['label']} · {cfg['model']} dengan API key pribadi "
+                   f"Anda (hanya untuk sesi ini).", icon="✅")
+    else:
+        st.info(f"Memakai AI bawaan sistem (Gemini {MODEL_NAME}). Isi API key di bawah jika ingin memakai "
+                "akun AI Anda sendiri.", icon="ℹ️")
+    with st.expander("Gunakan API key pribadi (opsional)"):
+        provider = st.selectbox("Penyedia", list(PROVIDERS), format_func=lambda p: PROVIDERS[p]["label"],
+                                key="llm_provider")
+        with st.form("llm_form", clear_on_submit=True):
+            model = st.text_input("Nama model", value=PROVIDERS[provider]["default_model"],
+                                  key=f"llm_model_{provider}")
+            api_key = st.text_input("API Key", type="password")
+            submitted = st.form_submit_button("Uji & pakai", type="primary")
+        st.caption("API key hanya disimpan di memori sesi ini: tidak ditulis ke database dan hilang saat logout "
+                   "atau halaman dimuat ulang. Isi percakapan (termasuk data pasien) dikirim ke penyedia yang "
+                   "Anda pilih, sesuaikan dengan kebijakan data rumah sakit.")
+        if submitted:
+            new_cfg = {"provider": provider, "model": model.strip(), "api_key": api_key.strip()}
+            if not new_cfg["model"] or len(new_cfg["api_key"]) < 20 or any(c.isspace() for c in new_cfg["api_key"]):
+                st.error("Nama model dan API key (tanpa spasi) wajib diisi dengan benar.")
+            else:
+                with st.spinner("Menguji koneksi..."):
+                    error = test_user_llm(new_cfg)
+                if error:
+                    st.error(f"Gagal terhubung: {error}")
+                else:
+                    st.session_state["user_llm"] = new_cfg
+                    st.rerun()
+        if cfg and st.button("Kembali ke AI sistem", key="llm_reset"):
+            st.session_state.pop("user_llm", None)
+            st.rerun()
+
+
 def render_profile_page() -> None:
     user = current_user()
     if not user:
@@ -51,5 +91,6 @@ def render_profile_page() -> None:
         st.subheader(user["full_name"] or user["username"])
         st.markdown(f"**Peran:** {service.ROLE_LABEL.get(user['role'], user['role'])}")
         st.caption(f"Username: {user['username']}  •  Login terakhir: {user['last_login_at'] or '-'} WIB")
+    _llm_section()
     st.subheader("Ganti password")
     _password_form(user, "change_pw_form")

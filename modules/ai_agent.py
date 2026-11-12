@@ -76,19 +76,19 @@ STATUS AGENT (dihitung sistem, andalkan ini):
 {{TOOLS_BLOCK}}
 ALUR:
 A. Jika informasi belum cukup -> status "ask": tanggapi jawaban terakhir (maksimal 3 kalimat), lalu beri 3 pertanyaan lanjutan BARU yang singkat tentang item yang BELUM digali pada checklist. Jika ada tanda bahaya KRITIS, sebutkan di awal tanggapan dan sarankan evaluasi segera, lalu tetap gali informasi yang paling menentukan.
-B. Status "final" hanya jika dokter meminta kesimpulan, atau informasi dari JAWABAN PASIEN dan DATA PASIEN TERSIMPAN kunjungan ini sudah cukup sehingga SETIAP temuan punya bukti. Jumlah pertanyaan tidak dibatasi: bila satu gejala inti saja belum jelas atau belum terbukti, tetap status "ask" dan gali yang belum jelas. Tanda bahaya kritis disebut di awal tetapi tidak menggantikan bukti. Tulis kesimpulan ringkas dengan struktur:
+B. Status "final" jika (1) item inti checklist (onset, quality, radiation, duration, associated, risk_factors) sudah terisi dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan, atau (3) ada tanda bahaya kritis dan data sudah cukup untuk dugaan awal. Tulis kesimpulan ringkas dengan struktur:
 Ringkasan gejala: ...
 Dugaan diagnosis (urut dari paling mungkin, maksimal 3): ...
 Dasar: ...
 Tanda bahaya / saran pemeriksaan lanjutan: ...
-Jika dokter meminta kesimpulan tetapi data belum memadai, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
+Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
 C. Jika dokter menyatakan kesimpulan sebelumnya TIDAK akurat: buat kesimpulan BARU (status "final") yang berbeda dan lebih sesuai. Tinjau ulang semua data, pertimbangkan diagnosis alternatif, perbaiki findings. Jangan mengulang kesimpulan yang sama.
 
 TEMUAN UNTUK KODE SNOMED CT:
 - Anda TIDAK menulis kode angka. Sebutkan konsep klinisnya di "findings"; sistem akan mencari kode SNOMED CT terdekat dari database.
 - Setiap temuan: "label" (istilah Indonesia), "term_en" (istilah medis Inggris baku, sependek mungkin, mis. "chest pain", "hypertension", "angina pectoris"), "kategori": "gejala" atau "faktor_risiko" atau "diagnosis".
 - Status "ask": findings harus [].
-- Status "final": isi findings HANYA yang ada buktinya. Setiap temuan wajib punya "bukti": kutipan singkat (maks 12 kata) persis dari Jawaban pasien atau DATA PASIEN TERSIMPAN kunjungan ini. Riwayat kunjungan sebelumnya BUKAN bukti gejala saat ini. Dilarang mengarang; tanpa bukti, jangan tulis temuan itu.
+- Status "final": WAJIB isi findings: minimal 1 gejala dan 1-3 dugaan diagnosis, ditambah faktor risiko bila ada. Walau tidak pasti, tetap tulis dugaan yang paling mendekati (di teks tandai sebagai dugaan). Jangan mengosongkan findings.
 
 Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulisan term_en; pakai bila relevan):
 {{REFERENSI}}
@@ -96,7 +96,7 @@ Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulis
 FORMAT OUTPUT (wajib persis, tanpa teks lain):
 [teks tanggapan atau kesimpulan]
 {{DELIM}}
-{"status": "ask atau final", "covered": ["onset", "quality"], "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala", "bukti": "nyeri dada sejak tadi pagi"}]}
+{"status": "ask atau final", "covered": ["onset", "quality"], "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
 Pada status "final", "quick_actions" harus []. "covered" = kunci checklist yang sudah digali (kumulatif) dari: onset, provocation, quality, radiation, severity, duration, associated, risk_factors, history, medications.
 Baris pemisah harus persis "{{DELIM}}" (tiga tanda sama dengan di kiri DAN kanan) pada baris tersendiri, tidak boleh dihilangkan atau diubah."""
 TOOLS_BLOCK_TEMPLATE = """
@@ -114,20 +114,85 @@ Contoh:
 "nyeri dada seperti ditindih" -> ["chest pain", "crushing chest pain"]
 "sesak napas" -> ["dyspnea", "shortness of breath"]
 "tekanan darah tinggi" -> ["hypertension"]"""
+# --- Penyedia AI: bawaan sistem (Gemini dari .env) atau API key pribadi pengguna (hanya di memori sesi) ---
+PROVIDERS = {
+    "gemini": {"label": "Google Gemini", "default_model": MODEL_NAME},
+    "openai": {"label": "OpenAI", "default_model": "gpt-4o-mini"},
+    "anthropic": {"label": "Anthropic (Claude)", "default_model": "claude-haiku-5-5"},
+}
+
+
+def get_user_llm():
+    """Pengaturan AI pribadi pengguna ini ({provider, model, api_key}) atau None. Tidak pernah ke database."""
+    cfg = st.session_state.get("user_llm")
+    return cfg if cfg and cfg.get("api_key") else None
+
+
+def _system_api_key() -> str:
+    try:
+        key = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        key = ""
+    return key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+
+
 def get_api_key() -> str:
-    api_key = st.session_state.get("custom_api_key", "")
+    """Kunci Gemini: milik pengguna bila ia memilih Gemini dengan kunci sendiri, selain itu kunci sistem."""
+    cfg = get_user_llm()
+    if cfg and cfg["provider"] == "gemini":
+        return cfg["api_key"]
+    api_key = _system_api_key()
     if not api_key:
-        try:
-            api_key = st.secrets.get("GEMINI_API_KEY", "")
-        except Exception:
-            api_key = ""
-    if not api_key:
-        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        raise ValueError(
-            "API Key belum ditemukan! Mohon masukkan API Key di menu Pengaturan sidebar."
-        )
+        raise ValueError("API Key sistem belum diatur di .env / secrets (GEMINI_API_KEY).")
     return api_key
+
+
+def _build_user_llm(cfg: dict, max_tokens: int, timeout: int):
+    """Model non-Gemini (paket langchain-openai / langchain-anthropic dimuat hanya bila dipakai)."""
+    provider, model, key = cfg["provider"], cfg["model"], cfg["api_key"]
+    if provider == "openai":
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError:
+            raise RuntimeError("Paket langchain-openai belum terpasang di server (tambahkan ke requirements.txt).")
+        return ChatOpenAI(model=model, api_key=key, max_tokens=max_tokens, timeout=timeout, max_retries=0)
+    if provider == "anthropic":
+        try:
+            from langchain_anthropic import ChatAnthropic
+        except ImportError:
+            raise RuntimeError("Paket langchain-anthropic belum terpasang di server (tambahkan ke requirements.txt).")
+        return ChatAnthropic(model=model, api_key=key, temperature=0.3, max_tokens=max_tokens,
+                             timeout=timeout, max_retries=0)
+    raise RuntimeError(f"Penyedia tidak dikenal: {provider}")
+
+
+def _stream_user_llm(cfg: dict, messages: list, max_tokens: int, timeout: int):
+    llm = _build_user_llm(cfg, max_tokens, max(timeout, 30))
+    try:
+        for chunk in llm.stream(messages):
+            text = extract_text_from_response(chunk.content)
+            if text:
+                yield text
+    except Exception as e:
+        short = " ".join(str(e).split())[:220]
+        print(f"[llm] {cfg['provider']}/{cfg['model']} gagal: {short}")
+        raise RuntimeError(f"{cfg['provider']}/{cfg['model']}: {short}") from e
+
+
+def test_user_llm(cfg: dict) -> str:
+    """Uji singkat kunci+model sebelum dipakai. Return '' bila berhasil, atau pesan galat."""
+    try:
+        if cfg["provider"] == "gemini":
+            llm = ChatGoogleGenerativeAI(model=cfg["model"], google_api_key=cfg["api_key"],
+                                         max_output_tokens=16, timeout=30, max_retries=0)
+        else:
+            llm = _build_user_llm(cfg, 16, 30)
+        next(iter(llm.stream([HumanMessage(content="Balas: OK")])), None)
+        return ""
+    except Exception as e:
+        return " ".join(str(e).split())[:200]
+
+
 def _model_chain() -> list:
     models = [MODEL_NAME] + [m.strip() for m in FALLBACK_MODELS.split(",") if m.strip()]
     chain = []
@@ -135,6 +200,8 @@ def _model_chain() -> list:
         if m not in chain:
             chain.append(m)
     return chain
+
+
 @st.cache_resource(show_spinner=False)
 def _build_llm(api_key: str, model: str, tuned: bool, max_tokens: int = MAX_OUTPUT_TOKENS, timeout: int = REQUEST_TIMEOUT):
     kwargs = dict(
@@ -186,6 +253,8 @@ def split_data_block(raw: str):
     if m:
         return raw[:m.start()], raw[m.start():], True
     return raw, "", False
+
+
 def strip_data_block(text: str) -> str:
     """Bersihkan pesan lama yang terlanjur tersimpan bersama blok data."""
     return split_data_block(text)[0].strip()
@@ -221,6 +290,8 @@ def visible_part(raw: str) -> str:
 # ---------------------------------------------------------------------------
 def _clean_query(text: str) -> str:
     return " ".join(re.sub(r"(Pertanyaan dokter|Jawaban pasien):", " ", text).split())
+
+
 def get_candidates(user_input: str, chat_history: list) -> dict:
     """Return {conceptId: term}. Hasil pencarian di-cache, jadi aman dipanggil ulang."""
     texts = [m["content"] for m in chat_history if m["role"] == "user"] + [user_input]
@@ -240,12 +311,16 @@ def get_candidates(user_input: str, chat_history: list) -> dict:
             if len(candidates) >= SNOMED_MAX_CANDIDATES:
                 return candidates
     return candidates
+
+
 def codes_to_text(codes) -> str:
     """Teks kode untuk konteks LLM pada pesan kesimpulan sebelumnya."""
     if not codes:
         return ""
     lines = [f"- {c.get('kategori', '')}: {c['term']} ({c['conceptId']})" for c in codes]
     return "\n\nKode SNOMED CT:\n" + "\n".join(lines)
+
+
 def build_system_prompt(candidates: dict, patient_context: str = "", agent_state: str = "",
                         tools_text: str = "") -> str:
     ref = "\n".join(f"- {term}" for term in candidates.values()) if candidates else "(tidak ada)"
@@ -268,6 +343,8 @@ def build_system_prompt(candidates: dict, patient_context: str = "", agent_state
         .replace("{{STATUS_AGENT}}", status_agent)
         .replace("{{DATA_PASIEN}}", data_pasien)
     )
+
+
 def build_messages(user_input: str, chat_history: list, candidates: dict, patient_context: str = "",
                    agent_state: str = "", tools_text: str = "") -> list:
     messages = [SystemMessage(content=build_system_prompt(candidates, patient_context, agent_state, tools_text))]
@@ -292,6 +369,8 @@ def build_messages(user_input: str, chat_history: list, candidates: dict, patien
 def _is_model_missing(e: Exception) -> bool:
     low = str(e).lower()
     return any(k in low for k in ("404", "not_found", "no longer available", "is not found"))
+
+
 def _is_transient_error(e: Exception) -> bool:
     low = str(e).lower()
     keys = (
@@ -300,6 +379,8 @@ def _is_transient_error(e: Exception) -> bool:
         "500", "internal",
     )
     return any(k in low for k in keys)
+
+
 def _is_config_error(e: Exception) -> bool:
     if _is_transient_error(e) or _is_model_missing(e):
         return False
@@ -309,9 +390,15 @@ def _is_config_error(e: Exception) -> bool:
         "unexpected keyword", "extra inputs", "validation error", "400",
     )
     return any(k in low for k in keys)
+
+
 def _stream_llm(messages: list, max_tokens: int = MAX_OUTPUT_TOKENS, timeout: int = REQUEST_TIMEOUT):
+    cfg = get_user_llm()
+    if cfg and cfg["provider"] != "gemini":  # OpenAI / Claude milik pengguna ini saja
+        yield from _stream_user_llm(cfg, messages, max_tokens, timeout)
+        return
     api_key = get_api_key()
-    models = _model_chain()
+    models = [cfg["model"]] if cfg and cfg.get("model") else _model_chain()
     errors = []
     for model in models:
         for tuned in ((False,) if model in _TUNED_REJECTED else (True, False)):
@@ -345,8 +432,12 @@ def _stream_llm(messages: list, max_tokens: int = MAX_OUTPUT_TOKENS, timeout: in
 # ---------------------------------------------------------------------------
 def _norm(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, _norm(a), _norm(b)).ratio()
+
+
 def match_label(query: str, term: str) -> str:
     """tepat / mirip / terdekat / lemah, berdasarkan kemiripan teks istilah."""
     r = _ratio(query, term)
@@ -358,6 +449,8 @@ def match_label(query: str, term: str) -> str:
     if r >= 0.4:
         return "terdekat"
     return "lemah"
+
+
 def find_best_concept(term_en: str, label: str):
     """Cari konsep SNOMED terdekat untuk satu temuan. Return (konsep, label_kecocokan) atau None."""
     pool, seen = [], set()
@@ -382,26 +475,15 @@ def find_best_concept(term_en: str, label: str):
     if _ratio(ref, best["term"]) < 0.5:
         best = pool[0]
     return best, match_label(ref, best["term"])
-def _tok(text) -> set:
-    return set(re.findall(r"\w+", str(text).lower()))
 
 
-def _grounded(item: dict, facts_tokens: set) -> bool:
-    """Bukti temuan harus (>= 60% katanya) ada di fakta kunjungan ini."""
-    bukti = _tok(item.get("bukti", ""))
-    return bool(bukti) and len(bukti & facts_tokens) / len(bukti) >= 0.6
-
-
-def map_findings_to_codes(findings, facts: str = None) -> list:
+def map_findings_to_codes(findings) -> list:
     codes, seen = [], set()
     if not isinstance(findings, list):
         return codes
-    facts_tokens = _tok(facts) if facts is not None else None
     for item in findings[:MAX_FINDINGS]:
         if not isinstance(item, dict):
             continue
-        if facts_tokens is not None and not _grounded(item, facts_tokens):
-            continue   # tanpa bukti -> dibuang
         label = str(item.get("label", "")).strip()
         term_en = str(item.get("term_en", "")).strip()
         if not (label or term_en):
@@ -424,6 +506,8 @@ def map_findings_to_codes(findings, facts: str = None) -> list:
             "match": match,
         })
     return codes
+
+
 def fallback_codes(text: str, candidates: dict) -> list:
     """Jaring pengaman: jika AI tidak memberi temuan, pakai konsep terdekat dari percakapan."""
     hits = [{"conceptId": cid, "term": term} for cid, term in list(candidates.items())[:3]]
@@ -460,12 +544,16 @@ def _data_of(raw: str):
     """Blok JSON dari keluaran AI (atau None)."""
     _, tail, found = split_data_block(raw)
     return _load_json_object(tail) if found else None
+
+
 def _as_final(result: dict, codes: list, candidates: dict) -> dict:
     result["status"] = "final"
     result["quick_actions"] = []
     result["codes"] = codes or fallback_codes(result["text"], candidates)
     return result
-def parse_response(raw: str, candidates: dict = None, force_final: bool = False, facts: str = None) -> dict:
+
+
+def parse_response(raw: str, candidates: dict = None, force_final: bool = False) -> dict:
     """Return dict: text, status ('ask'/'final'), quick_actions, codes, covered, dropped."""
     candidates = candidates or {}
     head, tail, found = split_data_block(raw)
@@ -486,14 +574,7 @@ def parse_response(raw: str, candidates: dict = None, force_final: bool = False,
         result["covered"] = clean_covered(data.get("covered"))
 
     if status == "final":
-        codes = map_findings_to_codes(data.get("findings"), facts)
-        if facts is not None and not force_final and not any(c["kategori"] == "gejala" for c in codes):
-            result["text"] = (
-                "Informasi dari jawaban pasien belum cukup untuk kesimpulan yang dapat "
-                "diverifikasi. Silakan lanjutkan anamnesis."
-            )
-            return result   # tetap status "ask"
-        return _as_final(result, codes, candidates)
+        return _as_final(result, map_findings_to_codes(data.get("findings")), candidates)
 
     if status == "tool":
         # Batas langkah tercapai (atau mode tanpa tool) tetapi AI masih meminta tool
@@ -518,6 +599,8 @@ def parse_response(raw: str, candidates: dict = None, force_final: bool = False,
     if force_final:
         return _as_final(result, [], candidates)
     return result
+
+
 def friendly_error(e: Exception) -> str:
     msg = str(e)
     low = msg.lower()
@@ -525,7 +608,7 @@ def friendly_error(e: Exception) -> str:
     if any(k in low for k in ("503", "unavailable", "high demand", "overloaded")):
         hints.append("Server Gemini sedang penuh (503). Ini masalah di sisi Google dan biasanya sementara.")
     if any(k in low for k in ("429", "quota", "resource_exhausted", "rate limit")):
-        hints.append("Kuota/batas permintaan Gemini gratis terlampaui. Tunggu sekitar 1 menit atau pakai API key lain.")
+        hints.append("Kuota/batas permintaan API terlampaui. Tunggu sekitar 1 menit atau pakai API key lain.")
     if _is_model_missing(e):
         hints.append(
             "Ada nama model yang sudah tidak tersedia (404). Jalankan list_models.py, lalu perbarui "

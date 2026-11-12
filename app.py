@@ -8,6 +8,7 @@ from components.chat_ui import render_chat_room, send_user_message
 from components.nav import go_to_patient_data, open_consultation, sync_url
 from components.patient_data import render_patient_data_page
 from components.sidebar import render_sidebar
+from components.today_visits import render_today_page
 from database import (
     create_visit,
     ensure_patient,
@@ -218,6 +219,8 @@ def render_roomchat_view():
 # --- Routing halaman ---
 if st.session_state.view == "patient_data":
     render_patient_data_page()
+elif st.session_state.view == "today":
+    render_today_page()
 elif st.session_state.active_patient is None:
     render_new_consultation_form()
 else:

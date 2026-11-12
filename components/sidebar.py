@@ -1,44 +1,14 @@
-import os
 import streamlit as st
-from components.nav import go_to_patient_data, open_consultation
-from auth.session import close_account_page
+from components.nav import go_to_patient_data
+from auth.session import close_account_page, current_user
+from components.today_visits import SIDEBAR_MAX, TODAY_VIEW_ROLES, go_to_today, today_patients, today_str
 from components.user_box import render_user_box
+
+
 def render_sidebar():
-    st.sidebar.title("Pengaturan & Pasien")
+    st.sidebar.title("Menu")
     if "patient_list" not in st.session_state:
         st.session_state.patient_list = []
-    # Ambil API key secara aman tanpa error jika secrets.toml tidak ada
-    env_api_key = ""
-    try:
-        env_api_key = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        pass
-    if not env_api_key:
-        env_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
-    st.sidebar.subheader("🔑 Gemini API Key")
-    if env_api_key:
-        st.sidebar.success("API Key terdeteksi otomatis dari sistem", icon="✅")
-        with st.sidebar.expander("Ganti API Key secara manual (Opsional)"):
-            user_api_key = st.text_input(
-                "Custom API Key:",
-                value=st.session_state.get("custom_api_key", ""),
-                type="password",
-            )
-            if user_api_key:
-                st.session_state["custom_api_key"] = user_api_key
-    else:
-        user_api_key = st.sidebar.text_input(
-            "Masukkan API Key Anda:",
-            value=st.session_state.get("custom_api_key", ""),
-            type="password",
-            help="Dapatkan API key dari Google AI Studio.",
-        )
-        if user_api_key:
-            st.session_state["custom_api_key"] = user_api_key
-            st.sidebar.success("API Key manual disimpan!", icon="✅")
-        else:
-            st.sidebar.warning("API Key belum diatur di .env maupun sidebar.", icon="⚠️")
-    st.sidebar.divider()
     # --- DATA PASIEN: satu tombol; pencarian pasien dilakukan di halamannya ---
     st.sidebar.subheader("🗂 Data Pasien")
     viewing_data = st.session_state.get("view") == "patient_data"
@@ -48,6 +18,25 @@ def render_sidebar():
         go_to_patient_data()
         st.rerun()
     st.sidebar.divider()
+    # --- KUNJUNGAN HARI INI: pasien yang ditandai admin berkunjung hari ini ---
+    user = current_user()
+    if user and user["role"] in TODAY_VIEW_ROLES:
+        st.sidebar.subheader("📅 Kunjungan")
+        if st.sidebar.button("Kunjungan Hari Ini", key="sb_today_home", use_container_width=True):
+            close_account_page()
+            go_to_today()
+            st.rerun()
+        todays = today_patients(today_str())
+        if not todays:
+            st.sidebar.caption("Belum ada pasien hari ini.")
+        for p in todays[:SIDEBAR_MAX]:
+            if st.sidebar.button(f"👤 {p['name']} ({p['mrn']})", key=f"sb_today_{p['mrn']}", use_container_width=True):
+                close_account_page()
+                go_to_today(p["mrn"])
+                st.rerun()
+        if len(todays) > SIDEBAR_MAX:
+            st.sidebar.caption(f"+{len(todays) - SIDEBAR_MAX} pasien lainnya di halaman Kunjungan Hari Ini")
+        st.sidebar.divider()
     # --- ROOMCHAT ---
     st.sidebar.subheader("💬 Roomchat")
     if st.sidebar.button("➕ Pasien / Konsultasi Baru", use_container_width=True):
@@ -59,17 +48,6 @@ def render_sidebar():
         st.session_state.view = "chat"
         close_account_page()
         st.rerun()
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📋 Riwayat Roomchat")
-    if not st.session_state.patient_list:
-        st.sidebar.info("Belum ada riwayat roomchat tersimpan.")
-    else:
-        for idx, pat in enumerate(st.session_state.patient_list):
-            btn_label = f"👤 {pat['name']} ({pat.get('mrn', 'MRN')})"
-            if st.sidebar.button(btn_label, key=f"history_pat_{idx}", use_container_width=True):
-                close_account_page()
-                open_consultation(pat)
-                st.rerun()
     st.sidebar.divider()
     st.sidebar.subheader("Profil dan Pengaturan")
-    render_user_box() 
+    render_user_box()
