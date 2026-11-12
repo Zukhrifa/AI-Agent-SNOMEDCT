@@ -22,20 +22,20 @@ def render_sidebar():
     user = current_user()
     if user and user["role"] in TODAY_VIEW_ROLES:
         st.sidebar.subheader("📅 Kunjungan")
-        if st.sidebar.button("Kunjungan Hari Ini", key="sb_today_home", use_container_width=True):
+        if st.sidebar.button("Kunjungan Pasien", key="sb_today_home", use_container_width=True):
             close_account_page()
             go_to_today()
             st.rerun()
-        todays = today_patients(today_str())
-        if not todays:
-            st.sidebar.caption("Belum ada pasien hari ini.")
-        for p in todays[:SIDEBAR_MAX]:
-            if st.sidebar.button(f"👤 {p['name']} ({p['mrn']})", key=f"sb_today_{p['mrn']}", use_container_width=True):
-                close_account_page()
-                go_to_today(p["mrn"])
-                st.rerun()
-        if len(todays) > SIDEBAR_MAX:
-            st.sidebar.caption(f"+{len(todays) - SIDEBAR_MAX} pasien lainnya di halaman Kunjungan Hari Ini")
+        #todays = today_patients(today_str())
+        #if not todays:
+            #st.sidebar.caption("Belum ada pasien hari ini.")
+        #for p in todays[:SIDEBAR_MAX]:
+            #if st.sidebar.button(f"👤 {p['name']} ({p['mrn']})", key=f"sb_today_{p['mrn']}", use_container_width=True):
+                #close_account_page()
+                #go_to_today(p["mrn"])
+                #st.rerun()
+        #if len(todays) > SIDEBAR_MAX:
+            #st.sidebar.caption(f"+{len(todays) - SIDEBAR_MAX} pasien lainnya di halaman Kunjungan Hari Ini")
         st.sidebar.divider()
     # --- ROOMCHAT ---
     st.sidebar.subheader("💬 Roomchat")
