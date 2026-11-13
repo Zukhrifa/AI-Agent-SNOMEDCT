@@ -1,11 +1,14 @@
+import json
 from datetime import date, datetime
 
 import streamlit as st
 from auth import audit_log
+from auth.session import current_user
 
 from components.clinical_form import render_clinical_form
 from components.nav import go_to_chat, go_to_patient_data, open_roomchat_for_mrn
 from database import (
+    _query,
     create_visit,
     ensure_patient,
     get_all_consultations,
@@ -22,7 +25,9 @@ from database import (
 )
 from modules.ai_agent import translate_to_snomed_terms
 from modules.patient_context import calc_age
+from modules.patient_profile import FIELDS as PROFILE_FIELDS, allergy_map, get_profile, has_data, save_profile
 from modules.rag_snomed import index_stats, lexical_search, search_terms
+
 
 SEX_OPTIONS = ["", "Laki-laki", "Perempuan"]
 CATEGORY_NAMES = {
@@ -30,6 +35,7 @@ CATEGORY_NAMES = {
     "diagnosis": "Dugaan diagnosis", "lainnya": "Lainnya",
 }
 MAX_SEARCH_RESULTS = 12
+MAX_ROWS = 30      # batas hasil pencarian
 
 
 def _refresh_consultations():
@@ -71,7 +77,6 @@ def _tab_identity(mrn: str, patient: dict):
             index=SEX_OPTIONS.index(sex_value) if sex_value in SEX_OPTIONS else 0,
         )
         submitted = st.form_submit_button("💾 Simpan Identitas")
-
     if submitted:
         if not name.strip():
             st.error("Nama tidak boleh kosong.")
@@ -148,13 +153,11 @@ def _tab_chief_complaint(mrn: str, patient: dict):
     ).strip()
     if not query:
         return
-
     try:
         results, notes = _collect_search_results(query, use_ai)
     except Exception as e:
         st.error(f"Pencarian gagal: {e}")
         return
-
     for note in notes:
         st.caption(note)
 
@@ -184,7 +187,6 @@ def _tab_results(mrn: str, patient: dict):
     st.markdown("**Temuan SNOMED CT terkonfirmasi**")
     st.caption("Terisi saat dokter menyetujui hasil AI: lewat tombol Setujui di formulir, "
                "atau menekan **Ya** pada pertanyaan \"Apakah jawaban AI akurat?\" di roomchat.")
-
     findings = list(patient.get("confirmed_findings") or [])
     if findings:
         for i, item in enumerate(findings):
@@ -204,7 +206,6 @@ def _tab_results(mrn: str, patient: dict):
     if not results:
         st.info("Belum ada kesimpulan anamnesis untuk pasien ini.")
         return
-
     for r in results:
         badge = "✅ Disetujui" if r.get("approved") else "belum diverifikasi"
         with st.expander(f"Kesimpulan — {r['created_at']} • {badge}"):
@@ -256,20 +257,207 @@ def _snippet(text: str, n: int = 220) -> str:
     return (text[:n] + "…") if len(text) > n else (text or "Belum ada hasil anamnesis AI.")
 
 
-SORTS = {
-    "Nama": lambda r: r["name"].lower(),
-    "No. RM": lambda r: r["mrn"],
+# ---------------------------------------------------------------------------
+# Pencarian per kolom: pilih dulu "cari berdasarkan", lalu ketik kata kunci.
+# Beberapa kata = semua harus cocok (AND); huruf besar/kecil diabaikan.
+# ---------------------------------------------------------------------------
+SEARCH_FIELDS = {
+    "Nama pasien": "nama pasien…",
+    "No. RM": "mis. MRN-12354",
+    "Kunjungan": "no. kunjungan atau tanggal (mis. 12/11/2026)",
+    "Roomchat": "nama pasien atau no. kunjungan roomchat…",
+    "Hasil anamnesis AI": "kata dalam kesimpulan AI, mis. diabetes…",
+    "Keluhan & kode SNOMED": "keluhan, temuan, atau kode SNOMED…",
 }
+_ANAMNESIS = "EXISTS (SELECT 1 FROM anamnesis_results r WHERE r.mrn = v.visit_no AND {cond})"
+VISIT_EXPRS = {
+    "Kunjungan": ["LOWER(v.visit_no) LIKE ?", "v.visit_date LIKE ?"],
+    "Hasil anamnesis AI": [_ANAMNESIS.format(cond="LOWER(r.summary) LIKE ?")],
+    "Keluhan & kode SNOMED": [
+        "LOWER(COALESCE(v.chief_complaints,'')) LIKE ?",
+        "LOWER(COALESCE(v.confirmed_findings,'')) LIKE ?",
+        _ANAMNESIS.format(cond="LOWER(COALESCE(r.codes,'')) LIKE ?"),
+    ],
+}
+CHAT_EXPRS = ["LOWER(c.patient_name) LIKE ?", "LOWER(c.medical_record_no) LIKE ?"]
+
+
+def _norm_term(term: str) -> str:
+    """dd/mm/yyyy -> yyyy-mm-dd agar cocok dengan tanggal tersimpan."""
+    try:
+        return datetime.strptime(term, "%d/%m/%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return term
+
+
+def _where(terms: list, exprs: list):
+    """AND antar kata, OR antar kolom. Tiap ekspresi memakai tepat satu '?'."""
+    one = "(" + " OR ".join(exprs) + ")"
+    params = []
+    for t in terms:
+        params += [f"%{_norm_term(t).replace('%', '')}%"] * len(exprs)
+    return " AND ".join([one] * len(terms)), tuple(params)
+
+
+def _search_visits(field: str, terms: list) -> list:
+    where, params = _where(terms, VISIT_EXPRS[field])
+    best = "FROM anamnesis_results r WHERE r.mrn = v.visit_no ORDER BY r.approved DESC, r.id DESC LIMIT 1"
+    rows = _query(
+        f"SELECT v.visit_no, v.mrn, p.name, v.visit_date, COALESCE(v.archived, 0), "
+        f"(SELECT r.summary {best}), (SELECT r.approved {best}) "
+        f"FROM visits v JOIN patients p ON p.mrn = v.mrn "
+        f"WHERE {where} ORDER BY v.visit_date DESC, v.created_at DESC LIMIT ?",
+        params + (MAX_ROWS,),
+    )
+    return [{"visit_no": r[0], "mrn": r[1], "name": r[2], "visit_date": r[3],
+             "archived": bool(r[4]), "summary": r[5], "approved": bool(r[6])} for r in rows]
+
+
+def _search_chats(terms: list) -> list:
+    where, params = _where(terms, CHAT_EXPRS)
+    rows = _query(
+        f"SELECT c.medical_record_no, c.patient_name, v.visit_date, COALESCE(v.archived, 0), c.messages "
+        f"FROM consultations c LEFT JOIN visits v ON v.visit_no = c.medical_record_no "
+        f"WHERE {where} ORDER BY c.id DESC LIMIT ?",
+        params + (MAX_ROWS,),
+    )
+    out = []
+    for r in rows:
+        try:
+            msgs = json.loads(r[4] or "[]")
+        except (TypeError, ValueError):
+            msgs = []
+        last = next((str(m.get("content", "")) for m in reversed(msgs) if m.get("content")), "")
+        out.append({"visit_no": r[0], "name": r[1], "visit_date": r[2], "archived": bool(r[3]),
+                    "count": len(msgs), "last": last})
+    return out
+
+
+# --- Riwayat tetap pasien ---------------------------------------------------
+def _profile_block(mrn: str):
+    """Riwayat tetap pasien: tampil saja; tombol Ubah membuka formulir. Dipakai di halaman pasien dan kunjungan."""
+    prof = get_profile(mrn)
+    editing = f"edit_profile_{mrn}"
+    if prof["saved"]:
+        st.caption(f"Terakhir diubah oleh {prof['updated_by'] or '—'} • {prof['updated_at'] or '—'}")
+    elif has_data(prof):
+        st.caption("Belum disimpan sebagai riwayat tetap: terisi dari kunjungan terakhir. Periksa, lalu simpan lewat Ubah.")
+    else:
+        st.caption("Belum diisi. Alergi yang kosong berarti belum diketahui, bukan tidak ada.")
+
+    if not st.session_state.get(editing):
+        cols = st.columns(2)
+        for i, (key, label) in enumerate(PROFILE_FIELDS):
+            cols[i % 2].markdown(f"**{'⚠️ ' if key == 'alergi' else ''}{label}**\n\n{prof[key] or '—'}")
+        if st.button("✏️ Ubah riwayat tetap", key=f"pf_edit_{mrn}"):
+            st.session_state[editing] = True
+            st.rerun()
+        return
+
+    with st.form(f"form_profile_{mrn}"):
+        cols = st.columns(2)
+        values = {}
+        for i, (key, label) in enumerate(PROFILE_FIELDS):
+            widget = cols[i % 2].text_input if key == "alergi" else cols[i % 2].text_area
+            kwargs = {} if key == "alergi" else {"height": 90}
+            values[key] = widget(label, value=prof[key], key=f"pf_{mrn}_{key}", **kwargs)
+        b_save, b_cancel = st.columns(2)
+        save = b_save.form_submit_button("💾 Simpan", type="primary", use_container_width=True)
+        cancel = b_cancel.form_submit_button("Batal", use_container_width=True)
+    if save:
+        user = current_user() or {}
+        save_profile(mrn, values, user.get("full_name") or user.get("username") or "")
+        audit_log.log("identitas_ubah", mrn, "riwayat tetap pasien")
+    if save or cancel:
+        st.session_state[editing] = False
+        st.rerun()
+
+
+# --- Daftar kartu pasien -----------------------------------------------------
+PATIENT_SORTS = {
+    "Nama A–Z": (lambda r: r["name"].lower(), False),
+    "Nama Z–A": (lambda r: r["name"].lower(), True),
+    "No. RM": (lambda r: r["mrn"], False),
+    "Kunjungan terbanyak": (lambda r: r["visits"], True),
+}
+MAX_CARDS = 50
+
+
+def _visit_badges(item: dict) -> list:
+    status = "✅ disetujui" if item.get("approved") else ("belum diverifikasi" if item.get("summary") else "")
+    return [b for b in ("📦 diarsipkan" if item.get("archived") else "", status) if b]
+
+
+def _render_result_row(prefix: str, item: dict, caption: str):
+    """Satu baris kunjungan/roomchat dengan tombol langsung: Buka data dan Roomchat."""
+    vno = item["visit_no"]
+    head = (f"**{item['name']}** · " if item.get("name") else "") + f"{_fmt_date(item['visit_date'])} · `{vno}`"
+    with st.container(border=True):
+        c_text, c_data, c_chat = st.columns([6, 1.4, 1.6])
+        c_text.markdown(head + "".join(f" · {b}" for b in _visit_badges(item)))
+        c_text.caption(caption)
+        if c_data.button("Buka data", key=f"{prefix}_data_{vno}", use_container_width=True):
+            go_to_patient_data(vno)
+            st.rerun()
+        if item["archived"]:
+            c_chat.caption("Roomchat diarsipkan")
+        elif c_chat.button("💬 Roomchat", key=f"{prefix}_chat_{vno}", use_container_width=True):
+            open_roomchat_for_mrn(vno)
+            st.rerun()
+
+
+def _render_patient_cards(rows: list):
+    if not rows:
+        st.info("Tidak ada pasien yang cocok.")
+        return
+    key_fn, reverse = PATIENT_SORTS[st.radio("Urutkan", list(PATIENT_SORTS), horizontal=True, key="pt_order")]
+    rows = sorted(rows, key=key_fn, reverse=reverse)
+    allergies = allergy_map()
+    for r in rows[:MAX_CARDS]:
+        mrn = r["mrn"]
+        age = calc_age(r["birth_date"])
+        sub = " · ".join(x for x in (f"{age} tahun" if age is not None else "", r["sex"] or "",
+                                     f"{r['visits']} kunjungan") if x)
+        with st.container(border=True):
+            c_text, c_btn = st.columns([7, 1.5])
+            c_text.markdown(f"**{r['name']}** · `{mrn}`")
+            c_text.caption(sub + (f" · ⚠️ Alergi: {allergies[mrn]}" if allergies.get(mrn) else " · Alergi: belum diisi"))
+            if c_btn.button("Buka", key=f"pc_{mrn}", use_container_width=True):
+                go_to_patient_data(mrn)
+                st.rerun()
+    if len(rows) > MAX_CARDS:
+        st.caption(f"Menampilkan {MAX_CARDS} dari {len(rows)} pasien. Gunakan kolom cari untuk mempersempit.")
+
+
+def _render_search_results(field: str, query: str, rows: list):
+    terms = query.lower().split()
+    if field in ("Nama pasien", "No. RM"):
+        attr = "name" if field == "Nama pasien" else "mrn"
+        _render_patient_cards([r for r in rows if all(t in r[attr].lower() for t in terms)])
+        return
+    try:
+        items = _search_chats(terms) if field == "Roomchat" else _search_visits(field, terms)
+    except Exception as e:
+        st.error(f"Pencarian gagal: {e}")
+        return
+    if not items:
+        st.info("Tidak ada hasil yang cocok.")
+        return
+    st.caption(f"{len(items)} hasil" + (f" (dibatasi {MAX_ROWS}; persempit kata kunci)" if len(items) >= MAX_ROWS else ""))
+    for it in items:
+        if field == "Roomchat":
+            caption = f"{it['count']} pesan • terakhir: {_snippet(it['last'], 160)}" if it["count"] else "Belum ada pesan."
+        else:
+            caption = _snippet(it["summary"])
+        _render_result_row("sc" if field == "Roomchat" else "sv", it, caption)
 
 
 def _page_patients():
-    st.caption("Klik **Cek kunjungan** untuk melihat riwayat kunjungan pasien.")
     rows = list_patient_overview()
     names = {r["mrn"]: r["name"] for r in rows}
-
-    c1, c2, c3 = st.columns([4, 3, 1])
-    query = c1.text_input("🔍 Cari pasien (nama atau MRN)", key="data_search").strip().lower()
-    order = c2.selectbox("Urutkan", list(SORTS), key="data_sort")
+    c0, c1, c3 = st.columns([2, 5, 1])
+    field = c0.selectbox("Cari berdasarkan", list(SEARCH_FIELDS), key="data_field")
+    query = " ".join(c1.text_input("🔍 Kata kunci", key="data_search", placeholder=SEARCH_FIELDS[field]).split())
     c3.write("")
     if c3.button("← Kembali", key="dp_back", use_container_width=True):
         go_to_chat()
@@ -292,33 +480,14 @@ def _page_patients():
                 go_to_patient_data(m)
                 st.rerun()
 
-    rows = sorted(
-        (r for r in rows
-         if not query or query in r["name"].lower() or query in r["mrn"].lower()),
-        key=SORTS[order],
-    )
-    if not rows:
-        st.info("Tidak ada pasien pada tampilan ini.")
-        return
-
-    widths = [3, 2, 2, 2, 2]
-    with st.container(height=460, border=True, key="gtbl_box_pt"):
-        with st.container(key="gtbl_h_pt"):
-            for col, label in zip(st.columns(widths), ["Nama", "No. RM", "Jenis kelamin", "Tanggal lahir", ""]):
-                col.caption(label)
-        for r in rows:
-            with st.container(key=f"gtbl_r_pt_{r['mrn']}"):
-                cols = st.columns(widths)
-                cols[0].write(r["name"])
-                cols[1].write(r["mrn"])
-                cols[2].write(r["sex"] or "—")
-                cols[3].write(_fmt_date(r["birth_date"]))
-                if cols[4].button("Cek kunjungan", key=f"cek_{r['mrn']}", use_container_width=True):
-                    go_to_patient_data(r["mrn"])
-                    st.rerun()
+    if query:
+        _render_search_results(field, query, rows)
+    else:
+        _render_patient_cards(rows)
 
 
 def _page_visits(mrn: str):
+    """Halaman satu pasien: riwayat tetap, identitas, dan riwayat kunjungan (tempat mengedit semuanya)."""
     patient = get_patient(mrn)
     if not patient:
         go_to_patient_data()
@@ -327,23 +496,21 @@ def _page_visits(mrn: str):
     age = calc_age(patient.get("birth_date"))
     info = " • ".join(x for x in (f"MRN: {mrn}", f"{age} tahun" if age is not None else "",
                                   patient.get("sex") or "") if x)
-
     col_info, col_new, col_back = st.columns([6, 2, 2])
-    with col_info:
-        st.subheader(patient["name"])
-        st.caption(info)
-    with col_new:
-        if st.button("➕ Kunjungan baru", key="dp_new_visit", use_container_width=True):
-            vno = create_visit(mrn)
-            audit_log.log("kunjungan_baru", vno)
-            go_to_patient_data(vno)
-            st.rerun()
-    with col_back:
-        if st.button("← Kembali", key="dp_back_list", use_container_width=True):
-            go_to_patient_data()
-            st.rerun()
+    col_info.subheader(patient["name"])
+    col_info.caption(info)
+    if col_new.button("➕ Kunjungan baru", key="dp_new_visit", use_container_width=True):
+        vno = create_visit(mrn)
+        audit_log.log("kunjungan_baru", vno)
+        go_to_patient_data(vno)
+        st.rerun()
+    if col_back.button("← Kembali", key="dp_back_list", use_container_width=True):
+        go_to_patient_data()
+        st.rerun()
 
-    with st.expander("Identitas pasien"):
+    st.markdown("#### Riwayat tetap")
+    _profile_block(mrn)
+    with st.expander("✏️ Ubah identitas pasien"):
         _tab_identity(mrn, patient)
 
     st.markdown("#### Riwayat kunjungan")
@@ -351,15 +518,7 @@ def _page_visits(mrn: str):
     if not visits:
         st.info("Belum ada kunjungan. Tekan **Kunjungan baru**.")
     for v in visits:
-        with st.container(border=True):
-            c_text, c_btn = st.columns([6, 1])
-            badges = [b for b in ("📦 roomchat diarsipkan" if v["archived"] else "",
-                                  "✅ disetujui" if v["approved"] else ("belum diverifikasi" if v["summary"] else "")) if b]
-            c_text.markdown(f"**{_fmt_date(v['visit_date'])}** · `{v['visit_no']}`" + "".join(f" · {b}" for b in badges))
-            c_text.caption(_snippet(v["summary"]))
-            if c_btn.button("Buka", key=f"vopen_{v['visit_no']}", use_container_width=True):
-                go_to_patient_data(v["visit_no"])
-                st.rerun()
+        _render_result_row("vd", v, _snippet(v["summary"]))
 
 
 def _previous_visits_block(mrn: str, vno: str):
@@ -413,10 +572,12 @@ def _page_visit(mrn: str, vno: str):
             go_to_patient_data(mrn)
             st.rerun()
 
+    with st.expander("Riwayat tetap pasien (alergi, penyakit dahulu, keluarga, obat, kebiasaan)"):
+        _profile_block(mrn)
     _previous_visits_block(mrn, vno)
 
     # Dua kolom: KIRI = formulir Data Klinis (isi, simpan, analisis);
-    #            KANAN = hasilnya (Keluhan Utama dan Hasil Anamnesis AI).
+    #             KANAN = hasilnya (Keluhan Utama dan Hasil Anamnesis AI).
     kiri, kanan = st.columns([3, 2], gap="large")
     with kiri:
         render_clinical_form(vno)

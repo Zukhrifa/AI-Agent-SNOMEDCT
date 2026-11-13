@@ -1,10 +1,14 @@
 from datetime import date, datetime
 
-from database import get_patient, list_anamnesis_results, list_supporting, previous_visit_results
+from database import get_patient, list_anamnesis_results, list_supporting
+from modules.patient_profile import get_profile
+
 
 MAX_CONTEXT_CHARS = 3500
 MAX_SUPPORTING_ITEMS = 8
 
+
+# "rps" milik kunjungan; sisanya riwayat tetap milik pasien (modules/patient_profile.py).
 ANAMNESIS_LABELS = [
     ("rps", "Riwayat penyakit sekarang"),
     ("rpd", "Riwayat penyakit dahulu"),
@@ -13,6 +17,7 @@ ANAMNESIS_LABELS = [
     ("alergi", "Alergi"),
     ("kebiasaan", "Kebiasaan (merokok/alkohol/aktivitas)"),
 ]
+
 
 EXAM_LABELS = [
     ("pe_jantung", "Pemeriksaan jantung"),
@@ -62,7 +67,7 @@ def format_vitals(pe: dict) -> str:
     return ", ".join(parts)
 
 
-def build_patient_context(mrn: str, history: bool = True) -> str:
+def build_patient_context(mrn: str) -> str:
     """Ringkasan data pasien tersimpan (untuk konteks AI). '' jika belum ada data."""
     patient = get_patient(mrn)
     if not patient:
@@ -86,11 +91,14 @@ def build_patient_context(mrn: str, history: bool = True) -> str:
             + "; ".join(f"{c.get('term', '')} ({c.get('conceptId', '')})" for c in complaints)
         )
 
-    anamnesis = patient.get("anamnesis") or {}
+    visit_anamnesis = patient.get("anamnesis") or {}
+    profile = get_profile(mrn)
     for key, label in ANAMNESIS_LABELS:
-        value = str(anamnesis.get(key, "")).strip()
+        value = str((visit_anamnesis if key == "rps" else profile).get(key, "")).strip()
         if value:
             lines.append(f"{label}: {value}")
+    if not profile["alergi"]:
+        lines.append("Alergi: belum diisi (jangan menganggap pasien tidak punya alergi)")
 
     exam = patient.get("physical_exam") or {}
     vitals = format_vitals(exam)
@@ -123,16 +131,6 @@ def build_patient_context(mrn: str, history: bool = True) -> str:
     if previous:
         summary = " ".join(previous[0]["summary"].split())[:600]
         lines.append(f"Kesimpulan anamnesis yang disetujui sebelumnya ({previous[0]['created_at']}): {summary}")
-
-    if history:
-        old = previous_visit_results(mrn, limit=2)
-        if old:
-            lines.append("RIWAYAT KUNJUNGAN SEBELUMNYA (rujukan saja, BUKAN keluhan kunjungan ini; "
-                         "konfirmasi ulang ke pasien):")
-            for r in old:
-                summary = " ".join(str(r["summary"]).split())[:300]
-                terms = "; ".join(t for t in r["terms"] if t)[:200]
-                lines.append(f"- {r['visit_date']}: {summary}" + (f" | Temuan: {terms}" if terms else ""))
 
     text = "\n".join(lines).strip()
     return text[:MAX_CONTEXT_CHARS]

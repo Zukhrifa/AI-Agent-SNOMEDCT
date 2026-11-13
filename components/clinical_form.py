@@ -1,7 +1,9 @@
-"""Data Klinis satu halaman untuk kunjungan: anamnesis + pemeriksaan fisik + data penunjang
-dengan satu tombol 'Simpan & Analisis'. Setelah disimpan, AI menganalisis data kunjungan,
-hasilnya tersimpan sebagai draft dan gejala terisi ke Keluhan Utama. Temuan SNOMED CT
-(diagnosis dugaan, faktor risiko) baru masuk ke Data Pasien setelah dokter menyetujui."""
+"""Data Klinis satu halaman untuk kunjungan: anamnesis (keluhan sekarang) + pemeriksaan fisik +
+data penunjang dengan satu tombol 'Simpan & Analisis'. Riwayat tetap pasien (penyakit dahulu,
+keluarga, alergi, obat, kebiasaan) ada di modules/patient_profile.py. Setelah disimpan, AI
+menganalisis data kunjungan, hasilnya tersimpan sebagai draft dan gejala terisi ke Keluhan
+Utama. Temuan SNOMED CT (diagnosis dugaan, faktor risiko) baru masuk ke Data Pasien setelah
+dokter menyetujui."""
 from datetime import date
 
 import streamlit as st
@@ -14,6 +16,7 @@ from database import (add_supporting, approve_anamnesis, delete_supporting, get_
 from modules.ai_agent import (FINAL_REQUEST_TEXT, friendly_error, get_candidates,
                               parse_response, run_agent)
 from modules.patient_context import build_patient_context
+
 
 SUPPORT_CATEGORIES = ["Laboratorium", "EKG", "Ekokardiografi", "Rontgen Thorax", "Lainnya"]
 APPROVE_ROLES = ("dokter", "admin")
@@ -126,13 +129,9 @@ def render_clinical_form(vno: str) -> None:
 
     with st.form(f"form_klinis_{vno}"):
         st.markdown("#### Anamnesis")
+        st.caption("Riwayat tetap (penyakit dahulu, keluarga, alergi, obat, kebiasaan) diisi di "
+                   "**Riwayat tetap pasien** pada bagian atas halaman.")
         rps = st.text_area("Riwayat penyakit sekarang", value=an.get("rps", ""), height=110)
-        rpd = st.text_area("Riwayat penyakit dahulu", value=an.get("rpd", ""), height=90)
-        rpk = st.text_area("Riwayat penyakit keluarga", value=an.get("rpk", ""), height=90)
-        obat = st.text_area("Obat yang sedang dikonsumsi", value=an.get("obat", ""), height=80)
-        alergi = st.text_input("Alergi", value=an.get("alergi", ""))
-        kebiasaan = st.text_area("Kebiasaan (merokok, alkohol, aktivitas fisik)",
-                                 value=an.get("kebiasaan", ""), height=80)
 
         st.markdown("#### Pemeriksaan Fisik")
         st.caption("Tanda vital: isi 0 jika belum diukur.")
@@ -163,22 +162,19 @@ def render_clinical_form(vno: str) -> None:
         pj_text = st.text_area("Hasil / interpretasi", height=100, key=f"cf_pj_{vno}_{n}",
                                placeholder="Contoh EKG: sinus rhythm, ST elevasi V1-V4 ...")
 
-        b_analyze = st.form_submit_button("▶ Simpan & Analisis", type="primary",
-                                          use_container_width=True)
+        b_analyze = st.form_submit_button("▶ Simpan & Analisis", type="primary", use_container_width=True)
         b_save = st.form_submit_button("💾 Simpan saja", use_container_width=True)
 
     if b_analyze or b_save:
-        anamnesis = {"rps": rps.strip(), "rpd": rpd.strip(), "rpk": rpk.strip(),
-                     "obat": obat.strip(), "alergi": alergi.strip(), "kebiasaan": kebiasaan.strip()}
         physical = {"td_sistolik": td_s, "td_diastolik": td_d, "nadi": nadi, "rr": rr,
                     "suhu": suhu, "spo2": spo2, "bb": bb, "tb": tb,
                     "pe_jantung": pe_jantung.strip(), "pe_paru": pe_paru.strip(),
                     "pe_lain": pe_lain.strip()}
         new_support = pj_text.strip()
-        if not (_filled(anamnesis) or _filled(physical) or new_support or list_supporting(vno)):
+        if not (rps.strip() or _filled(physical) or new_support or list_supporting(vno)):
             st.warning("Isi minimal salah satu: anamnesis, pemeriksaan fisik, atau data penunjang.")
         else:
-            update_patient(vno, anamnesis=anamnesis, physical_exam=physical)
+            update_patient(vno, anamnesis={**an, "rps": rps.strip()}, physical_exam=physical)
             audit_log.log("anamnesis_ubah", vno)
             audit_log.log("fisik_ubah", vno, "tanda vital & pemeriksaan fisik")
             if new_support:
@@ -188,6 +184,5 @@ def render_clinical_form(vno: str) -> None:
             st.session_state[f"cf_flash_{vno}"] = (
                 _analyze(vno) if b_analyze else ("success", "Data klinis tersimpan."))
             st.rerun()
-
     _supporting_list(vno)
     _approval_block(vno)

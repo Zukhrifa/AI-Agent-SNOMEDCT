@@ -1,9 +1,12 @@
 """Panel konteks pasien di sisi kanan roomchat: ringkasan data pasien + log aktivitas pasien ini."""
 import html
+
 import streamlit as st
 from auth import audit_log
 from database import get_patient, list_supporting
 from modules.patient_context import calc_age
+from modules.patient_profile import get_profile
+
 _CSS = """<style>
 .block-container{padding-right:21rem !important}
 [data-testid="stBottom"]{padding-right:20rem}
@@ -26,10 +29,16 @@ background:var(--secondary-background-color,#f6f7f9)}
 .rpm summary{cursor:pointer;font-weight:600;font-size:14px}
 .rpm[open] summary{margin-bottom:.4rem}}
 </style>"""
+
+
 def _e(v) -> str:
     return html.escape(str(v))
+
+
 def _sec(label: str, body: str) -> str:
     return f'<div class="lb">{label}</div><div>{body or "-"}</div>'
+
+
 def _vitals(pe: dict) -> str:
     parts = []
     if pe.get("td_sistolik") and pe.get("td_diastolik"):
@@ -39,13 +48,15 @@ def _vitals(pe: dict) -> str:
         if pe.get(key):
             parts.append(fmt.format(pe[key]))
     return "<br>".join(_e(p) for p in parts)
+
+
 def _panel(mrn: str) -> None:
     p = get_patient(mrn)
     if not p:
         return
+    prof = get_profile(mrn)
     age = calc_age(p.get("birth_date"))
     sub = " · ".join(x for x in (f"{age} tahun" if age is not None else "", p.get("sex") or "") if x)
-    an = p.get("anamnesis") or {}
     complaints = "<br>".join(f"• {_e(c['term'])} <small>{_e(c['conceptId'])}</small>"
                              for c in p.get("chief_complaints") or [])
     support = "<br>".join(f"• {_e(s['category'])} · {_e(s.get('recorded_on') or (s['created_at'] or '')[:10])}"
@@ -61,15 +72,16 @@ def _panel(mrn: str) -> None:
         f'<div class="nm">{_e(p["name"])}</div><div class="sub">{_e(mrn)}</div>',
         f'<div class="sub">{_e(sub)}</div>' if sub else "",
         "<hr>",
+        _sec("⚠️ Alergi", f"<b>{_e(prof['alergi'])}</b>" if prof["alergi"] else "belum diisi"),
         _sec("Keluhan utama", complaints),
         _sec("Tanda vital", _vitals(p.get("physical_exam") or {})),
-        _sec("Obat dikonsumsi", _e(an.get("obat", "")).replace("\n", "<br>")),
-        _sec("Alergi", _e(an.get("alergi", ""))),
+        _sec("Obat rutin", _e(prof["obat"]).replace("\n", "<br>")),
         _sec("Data penunjang terbaru", support),
         _sec("Temuan SNOMED terkonfirmasi", str(len(p.get("confirmed_findings") or [])) or "0"),
         "<hr>",
         f'<div class="lb">Log aktivitas pasien ini</div>{logs}',
-        '<div class="nt">Hanya referensi. Verifikasi seluruh informasi dengan rekam medis sebelum dipakai secara klinis.</div>',
+        '<div class="nt">Hanya referensi. Verifikasi seluruh informasi dengan rekam medis '
+        'sebelum dipakai secara klinis.</div>',
     ])
     # Desktop: panel tetap di kanan. HP/tablet: dilipat di atas chat (ketuk untuk membuka).
     st.markdown(
@@ -77,6 +89,8 @@ def _panel(mrn: str) -> None:
         f'<details class="rpm rc"><summary>📋 Konteks &amp; log pasien</summary>{body}</details>',
         unsafe_allow_html=True,
     )
+
+
 def render_context_panel(mrn: str) -> None:
     # Pembaruan otomatis dimatikan saat AI sedang menjawab agar streaming tidak terganggu.
     every = None if st.session_state.get("pending_input") else audit_log.LIVE_SECONDS
