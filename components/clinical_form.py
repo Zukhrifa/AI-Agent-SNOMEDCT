@@ -3,12 +3,11 @@ data penunjang dengan satu tombol 'Simpan & Analisis'. Riwayat tetap pasien (pen
 keluarga, alergi, obat, kebiasaan) ada di modules/patient_profile.py. Setelah disimpan, AI
 menganalisis data kunjungan, hasilnya tersimpan sebagai draft dan gejala terisi ke Keluhan
 Utama. Temuan SNOMED CT (diagnosis dugaan, faktor risiko) baru masuk ke Data Pasien setelah
-dokter menyetujui."""
+disetujui (siapa pun yang login; tercatat di log aktivitas)."""
 from datetime import date
 
 import streamlit as st
 from auth import audit_log
-from auth.session import current_user
 
 from database import (add_supporting, approve_anamnesis, delete_supporting, get_patient,
                       list_anamnesis_results, list_supporting, save_anamnesis_result,
@@ -19,7 +18,6 @@ from modules.patient_context import build_patient_context
 
 
 SUPPORT_CATEGORIES = ["Laboratorium", "EKG", "Ekokardiografi", "Rontgen Thorax", "Lainnya"]
-APPROVE_ROLES = ("dokter", "admin")
 
 
 def _filled(value) -> bool:
@@ -85,19 +83,16 @@ def _approval_block(vno: str) -> None:
     if not latest or latest["approved"]:
         return
     with st.container(border=True):
-        st.markdown("**Hasil AI terbaru: draft, belum disetujui dokter**")
+        st.markdown("**Hasil AI terbaru: draft, belum disetujui**")
         st.write(latest["summary"])
         for c in latest["codes"]:
             st.markdown(f"- **{c.get('term', '')}** `{c.get('conceptId', '')}`"
                         + (f" — _{c['match']}_" if c.get("match") else ""))
-        if (current_user() or {}).get("role") in APPROVE_ROLES:
-            if st.button("✅ Setujui & simpan temuan SNOMED CT", key=f"cf_approve_{vno}",
-                         type="primary", use_container_width=True):
-                info = approve_anamnesis(vno, latest["summary"], latest["codes"])
-                audit_log.log("ai_setuju", vno, f"{info.get('saved', 0)} temuan SNOMED tersimpan")
-                st.rerun()
-        else:
-            st.caption("Persetujuan dilakukan oleh dokter.")
+        if st.button("✅ Setujui & simpan temuan SNOMED CT", key=f"cf_approve_{vno}",
+                     type="primary", use_container_width=True):
+            info = approve_anamnesis(vno, latest["summary"], latest["codes"])
+            audit_log.log("ai_setuju", vno, f"{info.get('saved', 0)} temuan SNOMED tersimpan")
+            st.rerun()
 
 
 def _supporting_list(vno: str) -> None:

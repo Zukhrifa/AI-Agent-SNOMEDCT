@@ -185,7 +185,7 @@ def _tab_chief_complaint(mrn: str, patient: dict):
 
 def _tab_results(mrn: str, patient: dict):
     st.markdown("**Temuan SNOMED CT terkonfirmasi**")
-    st.caption("Terisi saat dokter menyetujui hasil AI: lewat tombol Setujui di formulir, "
+    st.caption("Terisi saat hasil AI disetujui: lewat tombol Setujui di formulir, "
                "atau menekan **Ya** pada pertanyaan \"Apakah jawaban AI akurat?\" di roomchat.")
     findings = list(patient.get("confirmed_findings") or [])
     if findings:
@@ -334,10 +334,21 @@ def _search_chats(terms: list) -> list:
 
 
 # --- Riwayat tetap pasien ---------------------------------------------------
-def _profile_block(mrn: str):
-    """Riwayat tetap pasien: tampil saja; tombol Ubah membuka formulir. Dipakai di halaman pasien dan kunjungan."""
+_fragment = getattr(st, "fragment", None) or (lambda fn: fn)
+
+
+def _rerun_local():
+    """Muat ulang hanya bagian ini (Streamlit baru); jika tidak didukung, seluruh halaman."""
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
+@_fragment
+def _profile_block(mrn: str, in_expander: bool = False):
+    """Riwayat tetap: nilai selalu tampil (2 kolom); formulir ubah (1 kolom) ada di dropdown."""
     prof = get_profile(mrn)
-    editing = f"edit_profile_{mrn}"
     if prof["saved"]:
         st.caption(f"Terakhir diubah oleh {prof['updated_by'] or '—'} • {prof['updated_at'] or '—'}")
     elif has_data(prof):
@@ -345,32 +356,28 @@ def _profile_block(mrn: str):
     else:
         st.caption("Belum diisi. Alergi yang kosong berarti belum diketahui, bukan tidak ada.")
 
-    if not st.session_state.get(editing):
-        cols = st.columns(2)
-        for i, (key, label) in enumerate(PROFILE_FIELDS):
-            cols[i % 2].markdown(f"**{'⚠️ ' if key == 'alergi' else ''}{label}**\n\n{prof[key] or '—'}")
-        if st.button("✏️ Ubah riwayat tetap", key=f"pf_edit_{mrn}"):
-            st.session_state[editing] = True
-            st.rerun()
-        return
+    cols = st.columns(2)
+    for i, (key, label) in enumerate(PROFILE_FIELDS):
+        cols[i % 2].markdown(f"**{'⚠️ ' if key == 'alergi' else ''}{label}**\n\n{prof[key] or '—'}")
 
-    with st.form(f"form_profile_{mrn}"):
-        cols = st.columns(2)
-        values = {}
-        for i, (key, label) in enumerate(PROFILE_FIELDS):
-            widget = cols[i % 2].text_input if key == "alergi" else cols[i % 2].text_area
-            kwargs = {} if key == "alergi" else {"height": 90}
-            values[key] = widget(label, value=prof[key], key=f"pf_{mrn}_{key}", **kwargs)
-        b_save, b_cancel = st.columns(2)
-        save = b_save.form_submit_button("💾 Simpan", type="primary", use_container_width=True)
-        cancel = b_cancel.form_submit_button("Batal", use_container_width=True)
-    if save:
-        user = current_user() or {}
-        save_profile(mrn, values, user.get("full_name") or user.get("username") or "")
-        audit_log.log("identitas_ubah", mrn, "riwayat tetap pasien")
-    if save or cancel:
-        st.session_state[editing] = False
-        st.rerun()
+    # Streamlit tidak mengizinkan expander di dalam expander, jadi di halaman kunjungan
+    # (yang sudah dibungkus expander) formulirnya memakai kotak biasa.
+    box = st.container(border=True) if in_expander else st.expander("✏️ Ubah riwayat tetap")
+    with box:
+        with st.form(f"form_profile_{mrn}"):
+            values = {}
+            for key, label in PROFILE_FIELDS:
+                if key == "alergi":
+                    values[key] = st.text_input(label, value=prof[key], key=f"pf_{mrn}_{key}")
+                else:
+                    values[key] = st.text_area(label, value=prof[key], height=90, key=f"pf_{mrn}_{key}")
+            save = st.form_submit_button("💾 Simpan", type="primary", use_container_width=True)
+        if save:
+            user = current_user() or {}
+            save_profile(mrn, values, user.get("full_name") or user.get("username") or "")
+            audit_log.log("identitas_ubah", mrn, "riwayat tetap pasien")
+            _rerun_local()
+    
 
 
 # --- Daftar kartu pasien -----------------------------------------------------
@@ -510,6 +517,7 @@ def _page_visits(mrn: str):
 
     st.markdown("#### Riwayat tetap")
     _profile_block(mrn)
+
     with st.expander("✏️ Ubah identitas pasien"):
         _tab_identity(mrn, patient)
 
@@ -573,7 +581,7 @@ def _page_visit(mrn: str, vno: str):
             st.rerun()
 
     with st.expander("Riwayat tetap pasien (alergi, penyakit dahulu, keluarga, obat, kebiasaan)"):
-        _profile_block(mrn)
+        _profile_block(mrn, in_expander=True)
     _previous_visits_block(mrn, vno)
 
     # Dua kolom: KIRI = formulir Data Klinis (isi, simpan, analisis);
