@@ -490,7 +490,10 @@ def _process_pending(slot):
         st.session_state.quick_actions = list(DEFAULT_QUICK_ACTIONS)
 
     _persist()
-    st.rerun()
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
 
 
 def render_chat_room():

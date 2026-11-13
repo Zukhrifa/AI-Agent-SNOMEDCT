@@ -27,6 +27,8 @@ from modules.ai_agent import translate_to_snomed_terms
 from modules.patient_context import calc_age
 from modules.patient_profile import FIELDS as PROFILE_FIELDS, allergy_map, get_profile, has_data, save_profile
 from modules.rag_snomed import index_stats, lexical_search, search_terms
+from components.floating_chat import render_floating_chat
+from components.today_visits import go_to_today
 
 
 SEX_OPTIONS = ["", "Laki-laki", "Perempuan"]
@@ -345,20 +347,24 @@ def _rerun_local():
         st.rerun()
 
 
-@_fragment
-def _profile_block(mrn: str, in_expander: bool = False):
-    """Riwayat tetap: nilai selalu tampil (2 kolom); formulir ubah (1 kolom) ada di dropdown."""
-    prof = get_profile(mrn)
+def _profile_view(prof: dict):
+    """Tampilan baca-saja riwayat tetap (2 kolom)."""
     if prof["saved"]:
         st.caption(f"Terakhir diubah oleh {prof['updated_by'] or '—'} • {prof['updated_at'] or '—'}")
     elif has_data(prof):
         st.caption("Belum disimpan sebagai riwayat tetap: terisi dari kunjungan terakhir. Periksa, lalu simpan lewat Ubah.")
     else:
         st.caption("Belum diisi. Alergi yang kosong berarti belum diketahui, bukan tidak ada.")
-
     cols = st.columns(2)
     for i, (key, label) in enumerate(PROFILE_FIELDS):
         cols[i % 2].markdown(f"**{'⚠️ ' if key == 'alergi' else ''}{label}**\n\n{prof[key] or '—'}")
+
+
+@_fragment
+def _profile_block(mrn: str, in_expander: bool = False):
+    """Riwayat tetap: nilai selalu tampil; formulir ubah (1 kolom) ada di dropdown."""
+    prof = get_profile(mrn)
+    _profile_view(prof)
 
     # Streamlit tidak mengizinkan expander di dalam expander, jadi di halaman kunjungan
     # (yang sudah dibungkus expander) formulirnya memakai kotak biasa.
@@ -413,25 +419,63 @@ def _render_result_row(prefix: str, item: dict, caption: str):
             st.rerun()
 
 
+_CARD_CSS = """<style>
+[class*="st-key-pc_toggle_"] button {
+    justify-content: flex-start !important; border: none !important;
+    background: transparent !important; padding-left: 0 !important;
+}
+[class*="st-key-pc_toggle_"] button div,
+[class*="st-key-pc_toggle_"] button p {
+    text-align: left !important; justify-content: flex-start !important; width: 100%;
+}
+</style>"""
+
+
+def _patient_card(r: dict, allergy: str):
+    """Kartu pasien: klik header untuk membuka detail (hanya satu kartu terbuka sekaligus);
+    tombol Buka membuka halaman pasien."""
+    mrn = r["mrn"]
+    is_open = st.session_state.get("pc_open_mrn") == mrn
+    age = calc_age(r["birth_date"])
+    sub = " · ".join(x for x in (f"{age} tahun" if age is not None else "", r["sex"] or "",
+                                 f"{r['visits']} kunjungan") if x)
+    with st.container(border=True, key=f"pcard_{mrn}"):
+        c_head, c_btn = st.columns([8, 1.5])
+        label = (f"{'▾' if is_open else '▸'}  **{r['name']}** · `{mrn}` · {sub} · "
+                 + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
+        if c_head.button(label, key=f"pc_toggle_{mrn}", use_container_width=True):
+            st.session_state["pc_open_mrn"] = None if is_open else mrn
+            _rerun_local()                   # hanya daftar kartu yang dimuat ulang
+        if c_btn.button("Buka", key=f"pc_{mrn}", use_container_width=True):
+            go_to_patient_data(mrn)
+            st.rerun()
+
+        if is_open:                          # data baru dimuat saat kartu dibuka
+            st.markdown("**Riwayat tetap**")
+            _profile_view(get_profile(mrn))
+            st.markdown("**Riwayat kunjungan**")
+            visits = list_visits(mrn)
+            if not visits:
+                st.caption("Belum ada kunjungan.")
+            for v in visits:
+                _render_result_row(f"pcv_{mrn}", v, _snippet(v["summary"]))
+
+
+@_fragment
+def _cards_list(rows: list, allergies: dict):
+    """Daftar kartu sebagai fragment: klik kartu tidak memuat ulang seluruh halaman."""
+    st.markdown(_CARD_CSS, unsafe_allow_html=True)
+    for r in rows[:MAX_CARDS]:
+        _patient_card(r, allergies.get(r["mrn"], ""))
+
+
 def _render_patient_cards(rows: list):
     if not rows:
         st.info("Tidak ada pasien yang cocok.")
         return
     key_fn, reverse = PATIENT_SORTS[st.radio("Urutkan", list(PATIENT_SORTS), horizontal=True, key="pt_order")]
     rows = sorted(rows, key=key_fn, reverse=reverse)
-    allergies = allergy_map()
-    for r in rows[:MAX_CARDS]:
-        mrn = r["mrn"]
-        age = calc_age(r["birth_date"])
-        sub = " · ".join(x for x in (f"{age} tahun" if age is not None else "", r["sex"] or "",
-                                     f"{r['visits']} kunjungan") if x)
-        with st.container(border=True):
-            c_text, c_btn = st.columns([7, 1.5])
-            c_text.markdown(f"**{r['name']}** · `{mrn}`")
-            c_text.caption(sub + (f" · ⚠️ Alergi: {allergies[mrn]}" if allergies.get(mrn) else " · Alergi: belum diisi"))
-            if c_btn.button("Buka", key=f"pc_{mrn}", use_container_width=True):
-                go_to_patient_data(mrn)
-                st.rerun()
+    _cards_list(rows, allergy_map())
     if len(rows) > MAX_CARDS:
         st.caption(f"Menampilkan {MAX_CARDS} dari {len(rows)} pasien. Gunakan kolom cari untuk mempersempit.")
 
@@ -467,7 +511,7 @@ def _page_patients():
     query = " ".join(c1.text_input("🔍 Kata kunci", key="data_search", placeholder=SEARCH_FIELDS[field]).split())
     c3.write("")
     if c3.button("← Kembali", key="dp_back", use_container_width=True):
-        go_to_chat()
+        go_to_today()
         st.rerun()
 
     with st.expander("➕ Tambah pasien baru", expanded=not names):
@@ -601,6 +645,7 @@ def _page_visit(mrn: str, vno: str):
         audit_log.live(_tab_logs)(vno)
     with tab_chat:
         _tab_chat_history(vno)
+    render_floating_chat(vno, patient["name"], _fmt_date(visit["visit_date"]), archived)
 
 
 def render_patient_data_page():
