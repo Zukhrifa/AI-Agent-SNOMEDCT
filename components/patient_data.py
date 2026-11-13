@@ -3,11 +3,10 @@ from datetime import date, datetime
 import streamlit as st
 from auth import audit_log
 
+from components.clinical_form import render_clinical_form
 from components.nav import go_to_chat, go_to_patient_data, open_roomchat_for_mrn
 from database import (
-    add_supporting,
     create_visit,
-    delete_supporting,
     ensure_patient,
     get_all_consultations,
     get_consultation,
@@ -15,7 +14,6 @@ from database import (
     get_visit,
     list_anamnesis_results,
     list_patient_overview,
-    list_supporting,
     list_visits,
     patient_mrn_of,
     set_visit_archived,
@@ -27,7 +25,6 @@ from modules.patient_context import calc_age
 from modules.rag_snomed import index_stats, lexical_search, search_terms
 
 SEX_OPTIONS = ["", "Laki-laki", "Perempuan"]
-SUPPORT_CATEGORIES = ["Laboratorium", "EKG", "Ekokardiografi", "Rontgen Thorax", "Lainnya"]
 CATEGORY_NAMES = {
     "gejala": "Gejala", "faktor_risiko": "Faktor risiko",
     "diagnosis": "Dugaan diagnosis", "lainnya": "Lainnya",
@@ -54,7 +51,7 @@ def _date_input(label: str, value: date, key: str):
 
 
 # ---------------------------------------------------------------------------
-# Tab-tab
+# Bagian-bagian halaman kunjungan
 # ---------------------------------------------------------------------------
 def _tab_identity(mrn: str, patient: dict):
     try:
@@ -123,8 +120,8 @@ def _collect_search_results(query: str, use_ai: bool):
 
 def _tab_chief_complaint(mrn: str, patient: dict):
     st.caption(
-        "Keluhan utama dipilih dari istilah SNOMED CT agar terstandar. "
-        "Ketik dalam bahasa Indonesia atau Inggris, lalu pilih dari hasil pencarian."
+        "Terisi otomatis dari hasil analisis AI. Bisa juga ditambah manual: ketik dalam bahasa "
+        "Indonesia atau Inggris, lalu pilih dari hasil pencarian SNOMED CT."
     )
     current = list(patient.get("chief_complaints") or [])
 
@@ -183,115 +180,10 @@ def _tab_chief_complaint(mrn: str, patient: dict):
             st.caption(f"Diagnostik: database SNOMED tidak terbaca ({e})")
 
 
-def _tab_anamnesis(mrn: str, patient: dict):
-    data = patient.get("anamnesis") or {}
-    with st.form(f"form_anamnesis_{mrn}"):
-        rps = st.text_area("Riwayat penyakit sekarang", value=data.get("rps", ""), height=110)
-        rpd = st.text_area("Riwayat penyakit dahulu", value=data.get("rpd", ""), height=90)
-        rpk = st.text_area("Riwayat penyakit keluarga", value=data.get("rpk", ""), height=90)
-        obat = st.text_area("Obat yang sedang dikonsumsi", value=data.get("obat", ""), height=80)
-        alergi = st.text_input("Alergi", value=data.get("alergi", ""))
-        kebiasaan = st.text_area(
-            "Kebiasaan (merokok, alkohol, aktivitas fisik)",
-            value=data.get("kebiasaan", ""), height=80,
-        )
-        submitted = st.form_submit_button("💾 Simpan Anamnesis")
-
-    if submitted:
-        update_patient(mrn, anamnesis={
-            "rps": rps.strip(), "rpd": rpd.strip(), "rpk": rpk.strip(),
-            "obat": obat.strip(), "alergi": alergi.strip(), "kebiasaan": kebiasaan.strip(),
-        })
-        audit_log.log("anamnesis_ubah", mrn)
-        st.success("Anamnesis tersimpan.")
-
-
-def _tab_physical(mrn: str, patient: dict):
-    pe = patient.get("physical_exam") or {}
-
-    with st.form(f"form_pe_{mrn}"):
-        st.markdown("**Tanda vital** (isi 0 jika belum diukur)")
-        c1, c2, c3, c4 = st.columns(4)
-        td_s = c1.number_input("TD Sistolik (mmHg)", 0, 300, int(pe.get("td_sistolik") or 0), 1)
-        td_d = c2.number_input("TD Diastolik (mmHg)", 0, 200, int(pe.get("td_diastolik") or 0), 1)
-        nadi = c3.number_input("Nadi (x/menit)", 0, 250, int(pe.get("nadi") or 0), 1)
-        rr = c4.number_input("RR (x/menit)", 0, 80, int(pe.get("rr") or 0), 1)
-
-        c5, c6, c7, c8 = st.columns(4)
-        suhu = c5.number_input(
-            "Suhu (°C)", min_value=0.0, max_value=45.0,
-            value=float(pe.get("suhu") or 0.0), step=0.1, format="%.1f",
-        )
-        spo2 = c6.number_input("SpO2 (%)", 0, 100, int(pe.get("spo2") or 0), 1)
-        bb = c7.number_input(
-            "Berat badan (kg)", min_value=0.0, max_value=400.0,
-            value=float(pe.get("bb") or 0.0), step=0.5, format="%.1f",
-        )
-        tb = c8.number_input(
-            "Tinggi badan (cm)", min_value=0.0, max_value=250.0,
-            value=float(pe.get("tb") or 0.0), step=0.5, format="%.1f",
-        )
-
-        st.markdown("**Temuan pemeriksaan fisik**")
-        pe_jantung = st.text_area(
-            "Jantung (bunyi jantung, murmur, JVP, dll.)", value=pe.get("pe_jantung", ""), height=90,
-        )
-        pe_paru = st.text_area("Paru (ronki, wheezing, dll.)", value=pe.get("pe_paru", ""), height=90)
-        pe_lain = st.text_area(
-            "Lain-lain (edema, akral, abdomen, dll.)", value=pe.get("pe_lain", ""), height=90,
-        )
-        submitted = st.form_submit_button("💾 Simpan Pemeriksaan Fisik")
-
-    if submitted:
-        update_patient(mrn, physical_exam={
-            "td_sistolik": td_s, "td_diastolik": td_d, "nadi": nadi, "rr": rr,
-            "suhu": suhu, "spo2": spo2, "bb": bb, "tb": tb,
-            "pe_jantung": pe_jantung.strip(), "pe_paru": pe_paru.strip(), "pe_lain": pe_lain.strip(),
-        })
-        audit_log.log("fisik_ubah", mrn, "tanda vital & pemeriksaan fisik")
-        if bb and tb:
-            st.success(f"Tersimpan. IMT: {bb / ((tb / 100) ** 2):.1f}")
-        else:
-            st.success("Pemeriksaan fisik tersimpan.")
-
-
-def _tab_supporting(mrn: str):
-    st.caption("Tambahkan hasil pemeriksaan penunjang. Data ini ikut dipakai AI di roomchat pasien ini.")
-
-    with st.form(f"form_support_{mrn}", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        category = c1.selectbox("Jenis pemeriksaan", SUPPORT_CATEGORIES)
-        recorded = c2.date_input("Tanggal pemeriksaan", value=date.today(), max_value=date.today())
-        content = st.text_area(
-            "Hasil / interpretasi", height=110,
-            placeholder="Contoh EKG: sinus rhythm, ST elevasi V1-V4 ...",
-        )
-        submitted = st.form_submit_button("➕ Simpan Data Penunjang")
-
-    if submitted:
-        if not content.strip():
-            st.warning("Isi hasil pemeriksaan terlebih dahulu.")
-        else:
-            add_supporting(mrn, category, content.strip(), recorded.isoformat())
-            audit_log.log("penunjang_tambah", mrn, category)
-            st.rerun()
-
-    items = list_supporting(mrn)
-    if not items:
-        st.info("Belum ada data penunjang.")
-    for item in items:
-        when = item.get("recorded_on") or (item.get("created_at") or "")[:10]
-        with st.expander(f"{item['category']} — {when}"):
-            st.write(item["content"])
-            if st.button("🗑 Hapus", key=f"pj_del_{item['id']}"):
-                delete_supporting(item["id"])
-                audit_log.log("penunjang_hapus", mrn, item["category"])
-                st.rerun()
-
-
 def _tab_results(mrn: str, patient: dict):
-    st.markdown("#### Temuan SNOMED CT terkonfirmasi")
-    st.caption("Terisi otomatis saat dokter menekan **Ya** pada pertanyaan \"Apakah jawaban AI akurat?\" di roomchat.")
+    st.markdown("**Temuan SNOMED CT terkonfirmasi**")
+    st.caption("Terisi saat dokter menyetujui hasil AI: lewat tombol Setujui di formulir, "
+               "atau menekan **Ya** pada pertanyaan \"Apakah jawaban AI akurat?\" di roomchat.")
 
     findings = list(patient.get("confirmed_findings") or [])
     if findings:
@@ -307,7 +199,7 @@ def _tab_results(mrn: str, patient: dict):
     else:
         st.info("Belum ada temuan terkonfirmasi.")
 
-    st.markdown("#### Riwayat kesimpulan anamnesis")
+    st.markdown("**Riwayat kesimpulan anamnesis**")
     results = list_anamnesis_results(mrn)
     if not results:
         st.info("Belum ada kesimpulan anamnesis untuk pasien ini.")
@@ -326,9 +218,6 @@ def _tab_results(mrn: str, patient: dict):
                     st.markdown(f"- {kategori}: **{c['term']}** `{c['conceptId']}`{note}")
 
 
-# ---------------------------------------------------------------------------
-# Halaman
-# ---------------------------------------------------------------------------
 def _tab_logs(mrn: str):
     """Fragment: riwayat aktivitas pasien, diperbarui otomatis."""
     st.caption(f"Riwayat aktivitas pengguna pada pasien ini (100 terbaru). Diperbarui otomatis tiap {audit_log.LIVE_SECONDS} detik.")
@@ -337,6 +226,8 @@ def _tab_logs(mrn: str):
         st.dataframe(audit_log.table_rows(logs, with_mrn=False), use_container_width=True, hide_index=True)
     else:
         st.info("Belum ada aktivitas tercatat.")
+
+
 def _tab_chat_history(mrn: str):
     """Riwayat roomchat (baca-saja), termasuk milik pasien yang diarsipkan."""
     consult = get_consultation(mrn)
@@ -350,6 +241,9 @@ def _tab_chat_history(mrn: str):
             st.markdown(str(m.get("content", "")))
 
 
+# ---------------------------------------------------------------------------
+# Halaman
+# ---------------------------------------------------------------------------
 def _fmt_date(iso) -> str:
     try:
         return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -521,21 +415,22 @@ def _page_visit(mrn: str, vno: str):
 
     _previous_visits_block(mrn, vno)
 
-    tabs = st.tabs(["Keluhan Utama (SNOMED)", "Anamnesis", "Pemeriksaan Fisik", "Data Penunjang",
-                    "Hasil Anamnesis AI", "Riwayat Aktivitas", "Riwayat Roomchat"])
-    with tabs[0]:
+    # Dua kolom: KIRI = formulir Data Klinis (isi, simpan, analisis);
+    #            KANAN = hasilnya (Keluhan Utama dan Hasil Anamnesis AI).
+    kiri, kanan = st.columns([3, 2], gap="large")
+    with kiri:
+        render_clinical_form(vno)
+    with kanan:
+        st.markdown("#### Keluhan Utama (SNOMED)")
         _tab_chief_complaint(vno, patient)
-    with tabs[1]:
-        _tab_anamnesis(vno, patient)
-    with tabs[2]:
-        _tab_physical(vno, patient)
-    with tabs[3]:
-        _tab_supporting(vno)
-    with tabs[4]:
+        st.markdown("#### Hasil Anamnesis AI")
         _tab_results(vno, patient)
-    with tabs[5]:
+
+    # Jarang dibuka: tetap sebagai tab
+    tab_log, tab_chat = st.tabs(["Riwayat Aktivitas", "Riwayat Roomchat"])
+    with tab_log:
         audit_log.live(_tab_logs)(vno)
-    with tabs[6]:
+    with tab_chat:
         _tab_chat_history(vno)
 
 

@@ -50,11 +50,80 @@ MATCH_STYLES = {
 }
 
 
+_CODE = ("background:#f1f5f9;border-radius:4px;padding:1px 5px;font-family:ui-monospace,Consolas,monospace;"
+         "font-size:13px;")
+_TD = "border:1px solid #e2e8f0;padding:4px 8px;text-align:left;"
+
+
+def _fmt_inline(s: str) -> str:
+    s = re.sub(r"`([^`]+)`", rf"<code style='{_CODE}'>\1</code>", s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    return re.sub(r"(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])", r"<i>\1</i>", s)
+
+
+def _fmt_table(rows: list) -> str:
+    cells = [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows if not re.match(r"^\s*\|?[\s:|-]+\|?\s*$", r)]
+    if not cells:
+        return ""
+    head, body = cells[0], cells[1:]
+    th = "".join(f"<th style='{_TD}background:#f8fafc;'>{_fmt_inline(c)}</th>" for c in head)
+    tr = "".join("<tr>" + "".join(f"<td style='{_TD}'>{_fmt_inline(c)}</td>" for c in r) + "</tr>" for r in body)
+    return ("<div style='overflow-x:auto;margin:6px 0;'><table style='border-collapse:collapse;font-size:13px;'>"
+            f"<tr>{th}</tr>{tr}</table></div>")
+
+
 def _fmt(text: str) -> str:
-    """Escape HTML, dukung **tebal** dan baris baru agar aman di bubble."""
-    safe = html.escape(text or "")
-    safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
-    return safe.replace("\n", "<br>")
+    """Teks (Markdown ringan) -> HTML aman. Mendukung **tebal**, *miring*, `kode`, daftar, judul, tabel, blok kode."""
+    lines = html.escape(text or "").split("\n")
+    out, i, para = [], 0, []
+
+    def flush():
+        if para:
+            out.append("<br>".join(para))
+            para.clear()
+
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().startswith("```"):                       # blok kode
+            flush()
+            i += 1
+            code = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code.append(lines[i])
+                i += 1
+            out.append("<pre style='background:#f1f5f9;border-radius:8px;padding:8px 10px;overflow-x:auto;"
+                       f"font-size:13px;margin:6px 0;'>{'&#10;'.join(code)}</pre>")
+            i += 1
+            continue
+        if line.strip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
+            flush()
+            block = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                block.append(lines[i])
+                i += 1
+            out.append(_fmt_table(block))
+            continue
+        m_ul, m_ol = re.match(r"^\s*[-*•]\s+(.*)", line), re.match(r"^\s*\d+[.)]\s+(.*)", line)
+        if m_ul or m_ol:
+            flush()
+            tag, pat = ("ul", r"^\s*[-*•]\s+(.*)") if m_ul else ("ol", r"^\s*\d+[.)]\s+(.*)")
+            items = []
+            while i < len(lines) and re.match(pat, lines[i]):
+                items.append(f"<li>{_fmt_inline(re.match(pat, lines[i]).group(1))}</li>")
+                i += 1
+            out.append(f"<{tag} style='margin:4px 0 4px 18px;padding:0;'>{''.join(items)}</{tag}>")
+            continue
+        if re.match(r"^#{1,6}\s+", line):
+            flush()
+            out.append(f"<div style='font-weight:600;color:#0f172a;margin:6px 0 2px;'>{_fmt_inline(re.sub(r'^#+\s+', '', line))}</div>")
+        elif not line.strip():
+            flush()
+            out.append("<div style='height:6px;'></div>")
+        else:
+            para.append(_fmt_inline(line))
+        i += 1
+    flush()
+    return "".join(out)
 
 
 def _user_bubble(msg: dict) -> str:
@@ -141,10 +210,11 @@ def _approval_note(approved, approval) -> str:
 
 
 def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False,
-               approved=None, approval=None) -> str:
+               approved=None, approval=None, name: str = "AI Agent", title: str = None, footer: str = "") -> str:
     color = "#94a3b8" if loading else "#334155"
     italic = "font-style:italic;" if loading else ""
-    title = "Kesimpulan Anamnesis" if final else "Assessment"
+    if title is None:                     # None = bawaan roomchat pasien; "" = tanpa judul
+        title = "Kesimpulan Anamnesis" if final else "Assessment"
     border = "#93c5fd" if final else "#e2e8f0"
     bg = "#f8fbff" if final else "#ffffff"
 
@@ -166,14 +236,27 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
         'align-items:center;justify-content:center;margin-right:10px;color:#2563eb;font-weight:bold;'
         'font-size:14px;flex-shrink:0;">🤖</div>',
         '<div style="flex:1;">',
-        '<div style="font-size:13px;font-weight:600;color:#16a34a;margin-bottom:4px;">AI Agent</div>',
+        f'<div style="font-size:13px;font-weight:600;color:#16a34a;margin-bottom:4px;">{html.escape(name)}</div>',
         f'<div style="background-color:{bg};border:1px solid {border};border-radius:12px;padding:16px;'
         f'max-width:85%;font-size:14px;color:{color};{italic}line-height:1.5;'
         'box-shadow:0 1px 2px rgba(0,0,0,0.02);">',
-        f'<div style="font-weight:600;color:#0f172a;margin-bottom:6px;">{title}</div>',
+        f'<div style="font-weight:600;color:#0f172a;margin-bottom:6px;">{html.escape(title)}</div>' if title else "",
         _fmt(text),
         extra,
+        footer,
         "</div></div></div>",
+    ])
+
+
+def _header(name: str, meta: str = "", badge: str = "Active") -> str:
+    return "".join([
+        '<div style="padding:12px 0;border-bottom:1px solid #e2e8f0;margin-bottom:20px;display:flex;'
+        'align-items:center;justify-content:space-between;"><div>',
+        f'<span style="font-size:18px;font-weight:700;color:#0f172a;">{html.escape(name)}</span>',
+        f'<span style="font-size:13px;color:#64748b;margin-left:10px;">{html.escape(meta)}</span>' if meta else "",
+        '<span style="background-color:#dcfce7;color:#166534;font-size:11px;padding:2px 8px;border-radius:12px;'
+        f'margin-left:8px;font-weight:600;">{html.escape(badge)}</span>' if badge else "",
+        "</div></div>",
     ])
 
 
@@ -380,13 +463,10 @@ def _process_pending(slot):
     st.session_state.pending_input = None
 
     if raw.strip():
-        facts = " ".join(conversation_texts(list(history) + [{"role": "user", "content": pending}])) \
-            + " " + build_patient_context(patient["mrn"], history=False)
         result = parse_response(
             raw,
             get_candidates(pending, history),
             force_final=pending.startswith(CONTROL_PREFIX),
-            facts=facts,
         )
         text = result["text"] or "Maaf, respons AI kosong. Silakan kirim ulang pesan Anda."
 
@@ -439,15 +519,7 @@ def render_chat_room():
     has_user_msg = any(m["role"] == "user" for m in messages)
 
     # Header Pasien
-    st.markdown(f"""
-    <div style="padding: 12px 0; border-bottom: 1px solid #e2e8f0; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
-        <div>
-            <span style="font-size: 18px; font-weight: 700; color: #0f172a;">{html.escape(patient['name'])}</span>
-            <span style="font-size: 13px; color: #64748b; margin-left: 10px;">{html.escape(patient['mrn'])}</span>
-            <span style="background-color: #dcfce7; color: #166534; font-size: 11px; padding: 2px 8px; border-radius: 12px; margin-left: 8px; font-weight: 600;">Active</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(_header(patient["name"], patient["mrn"]), unsafe_allow_html=True)
 
     # Riwayat percakapan
     for msg in messages:
