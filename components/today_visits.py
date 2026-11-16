@@ -47,6 +47,12 @@ def _init_table() -> bool:
 
 
 @st.cache_data(ttl=15, show_spinner=False)
+def _overview() -> list:
+    """Daftar pasien (dicache singkat): dipakai daftar hari ini dan panel 'Atur pasien'."""
+    return list_patient_overview()
+
+
+@st.cache_data(ttl=15, show_spinner=False)
 def today_patients(day: str) -> list:
     """Pasien yang ditandai berkunjung pada tanggal `day` (urut sesuai waktu ditambahkan)."""
     _init_table()
@@ -54,7 +60,7 @@ def today_patients(day: str) -> list:
         "SELECT mrn FROM today_visits WHERE visit_date = ? ORDER BY created_at, mrn", (day,))]
     if not order:
         return []
-    info = {p["mrn"]: p for p in list_patient_overview()}
+    info = {p["mrn"]: p for p in _overview()}
     return [info[m] for m in order if m in info]
 
 
@@ -118,7 +124,7 @@ def _page_list(can_edit: bool):
     if can_edit:
         with st.expander("➕ Atur pasien hari ini", expanded=not rows):
             in_today = {p["mrn"] for p in rows}
-            options = [p for p in list_patient_overview() if p["mrn"] not in in_today]
+            options = [p for p in _overview() if p["mrn"] not in in_today]
             labels = {p["mrn"]: f"{p['name']} ({p['mrn']})" for p in options}
             with st.form("form_add_today", clear_on_submit=True):
                 chosen = st.multiselect("Pilih pasien (ketik untuk mencari)", list(labels),

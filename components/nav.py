@@ -1,6 +1,5 @@
 import streamlit as st
 from auth import audit_log
-
 from database import get_all_consultations, get_patient, get_visit, save_or_update_consultation
 from modules.ai_agent import DEFAULT_QUICK_ACTIONS
 
@@ -22,6 +21,7 @@ def go_to_chat():
 # Sinkron halaman <-> URL, agar tombol Kembali/Maju browser berfungsi di dalam aplikasi.
 # Parameter URL: v=halaman, m=MRN pasien, k=nomor kunjungan, c=roomchat aktif,
 # t=pasien di Kunjungan Hari Ini, p=halaman akun (profile/admin).
+# Login baru selalu dimulai dari Kunjungan Hari Ini (flag _fresh_login dari auth/session.py).
 # ---------------------------------------------------------------------------
 _KEYS = ("v", "m", "k", "c", "t", "p")
 
@@ -40,7 +40,7 @@ def _url_state() -> tuple:
 def _apply(state: tuple):
     ss = st.session_state
     ss.view, ss.data_mrn, ss.data_visit = state[0], state[1], state[2]
-    ss.today_mrn, ss.account_page = state[4], state[5]  # Kembali/Maju browser ikut memulihkan keduanya
+    ss.today_mrn, ss.account_page = state[4], state[5]   # Kembali/Maju browser ikut memulihkan keduanya
     if state[3] != (ss.get("active_patient") or {}).get("mrn"):
         pat = next((c for c in ss.get("patient_list", []) if c["mrn"] == state[3]), None)
         ss.active_patient = pat
@@ -51,9 +51,18 @@ def _apply(state: tuple):
 
 def sync_url():
     """Panggil sebelum render halaman dan sekali lagi di akhir app.py.
+    Login baru -> Kunjungan Hari Ini (parameter URL sisa sesi lama diabaikan).
     URL berubah (Kembali/Maju browser, tautan, refresh) -> halaman mengikuti URL.
     Halaman berubah (tombol di aplikasi) -> URL ditulis (menambah riwayat browser)."""
     ss = st.session_state
+    if ss.pop("_fresh_login", False):
+        _apply(("today", None, None, None, None, None))
+        params = {"v": "today"}
+        if "s" in st.query_params:                      # jaga token sesi agar login tetap pulih saat refresh
+            params["s"] = st.query_params["s"]
+        st.query_params.from_dict(params)
+        ss["_url_last"] = _state()
+        return
     url, cur, last = _url_state(), _state(), ss.get("_url_last")
     changed = url != ("chat", None, None, None, None, None) if last is None else url != last
     if changed:
@@ -62,10 +71,10 @@ def sync_url():
         return
     if cur != url:
         params = {k: v for k, v in zip(_KEYS, cur) if v and not (k == "v" and v == "chat")}
-        if "s" in st.query_params:  # jaga token sesi agar login tetap pulih saat refresh
+        if "s" in st.query_params:                      # jaga token sesi agar login tetap pulih saat refresh
             params["s"] = st.query_params["s"]
         st.query_params.from_dict(params)
-    ss["_url_last"] = cur
+        ss["_url_last"] = cur
 
 
 def open_consultation(pat: dict):
@@ -84,7 +93,6 @@ def open_roomchat_for_mrn(mrn: str):
         if consultation["mrn"] == mrn:
             open_consultation(consultation)
             return
-
     patient = get_patient(mrn)
     name = patient["name"] if patient else mrn
     greeting = (
@@ -94,7 +102,6 @@ def open_roomchat_for_mrn(mrn: str):
     )
     messages = [{"role": "assistant", "content": greeting}]
     quick_actions = list(DEFAULT_QUICK_ACTIONS)
-
     save_or_update_consultation(name, mrn, messages, quick_actions)
     st.session_state.patient_list = get_all_consultations()
     open_consultation({

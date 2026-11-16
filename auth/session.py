@@ -10,12 +10,12 @@ from auth import service, users_db
 
 _KEY = "auth_user"
 _CHECKED_AT = "auth_checked_at"
-_PAGE = "account_page"  # None | "profile" | "admin"
+_PAGE = "account_page"        # None | "profile" | "admin"
 _TOKEN = "auth_token"
 _SAVED = "auth_state_saved"
-QP = "s"  # nama parameter URL pembawa token sesi
-SESSION_SECONDS = 12 * 3600  # login bertahan 12 jam (satu shift) sampai logout
-RECHECK_SECONDS = 300  # akun yang dinonaktifkan admin kehilangan akses paling lambat 5 menit
+QP = "s"                      # nama parameter URL pembawa token sesi
+SESSION_SECONDS = 12 * 3600   # login bertahan 12 jam (satu shift) sampai logout
+RECHECK_SECONDS = 300         # akun yang dinonaktifkan admin kehilangan akses paling lambat 5 menit
 
 
 def _hash(token: str) -> str:
@@ -29,7 +29,8 @@ def current_user():
 def login_user(user: dict) -> None:
     st.session_state[_KEY] = user
     st.session_state[_CHECKED_AT] = time.time()
-    if _TOKEN not in st.session_state:  # login baru: buat token sesi + cookie
+    if _TOKEN not in st.session_state:        # login baru: buat token sesi + cookie
+        st.session_state["_fresh_login"] = True   # nav.sync_url memulai dari Kunjungan Hari Ini
         token = secrets.token_urlsafe(32)
         try:
             users_db.create_session(_hash(token), user["id"], int(time.time()) + SESSION_SECONDS)
@@ -37,7 +38,7 @@ def login_user(user: dict) -> None:
             print(f"[auth] gagal membuat sesi: {e}")
             return
         st.session_state[_TOKEN] = token
-        st.query_params[QP] = token  # tetap ada di URL saat refresh
+        st.query_params[QP] = token           # tetap ada di URL saat refresh
 
 
 def refresh_user() -> None:
@@ -50,14 +51,14 @@ def refresh_user() -> None:
 
 def logout() -> None:
     from auth import audit_log
-    audit_log.log("logout")  # catat sebelum sesi dibersihkan
+    audit_log.log("logout")                   # catat sebelum sesi dibersihkan
     token = st.session_state.get(_TOKEN)
     if token:
         try:
             users_db.delete_session(_hash(token))
         except Exception as e:
             print(f"[auth] gagal menghapus sesi: {e}")
-    st.session_state.clear()  # bersihkan juga data pasien/chat dari sesi ini
+    st.session_state.clear()                  # bersihkan juga data pasien/chat dari sesi ini
     st.query_params.pop(QP, None)
 
 
@@ -81,7 +82,7 @@ def _restore() -> bool:
     row = users_db.get_session(_hash(token))
     fresh = service.reload_user(row["user_id"]) if row and row["expires_at"] >= time.time() else None
     if not fresh:
-        st.query_params.pop(QP, None)  # token tidak berlaku: buang dari URL
+        st.query_params.pop(QP, None)         # token tidak berlaku: buang dari URL
         return False
     st.session_state[_TOKEN] = token
     try:
@@ -90,12 +91,12 @@ def _restore() -> bool:
         s = {}
     if s.get("view") in ("chat", "patient_data"):
         st.session_state.view = s["view"]
-    if s.get("data_mrn"):
-        st.session_state.data_mrn = s["data_mrn"]
+        if s.get("data_mrn"):
+            st.session_state.data_mrn = s["data_mrn"]
     if s.get("page") in ("profile", "admin"):
         st.session_state[_PAGE] = s["page"]
     if s.get("mrn"):
-        st.session_state["_restore_mrn"] = s["mrn"]  # dipasang app.py setelah daftar roomchat dimuat
+        st.session_state["_restore_mrn"] = s["mrn"]   # dipasang app.py setelah daftar roomchat dimuat
     login_user(fresh)
     return True
 
@@ -143,7 +144,7 @@ def require_login() -> dict:
     if user["must_change_password"]:
         render_force_password_change(user)
         st.stop()
-    if not restored:  # saat pemulihan, tunggu app.py memasang roomchat dulu agar tidak menimpa state
+    if not restored:        # saat pemulihan, tunggu app.py memasang roomchat dulu agar tidak menimpa state
         _save_state()
     return user
 
