@@ -11,7 +11,7 @@ from auth import audit_log
 from auth.session import current_user
 
 from components.nav import go_to_patient_data, open_roomchat_for_mrn
-from database import (_NOW, _query, _write, create_visit, list_patient_overview,
+from database import (_NOW, _query, _run, _write, create_visit, list_patient_overview,
                       list_visits)
 from modules.patient_profile import allergy_map
 
@@ -43,9 +43,19 @@ def _init_table() -> bool:
     _write([(
         f"CREATE TABLE IF NOT EXISTS today_visits ("
         f"visit_date TEXT NOT NULL, mrn TEXT NOT NULL, added_by TEXT, "
-        f"created_at TEXT DEFAULT ({_NOW}), PRIMARY KEY (visit_date, mrn))",
+        f"created_at TEXT DEFAULT ({_NOW}), queue_no INTEGER, PRIMARY KEY (visit_date, mrn))",
         (),
     )])
+    try:  # tabel lama belum punya nomor antrean: tambahkan kolom + isi dari urutan tambah
+        _run([("SELECT queue_no FROM today_visits LIMIT 1", ())])
+    except Exception:
+        _write([
+            ("ALTER TABLE today_visits ADD COLUMN queue_no INTEGER", ()),
+            ("UPDATE today_visits SET queue_no = (SELECT COUNT(*) FROM today_visits t "
+             "WHERE t.visit_date = today_visits.visit_date "
+             "AND (t.created_at < today_visits.created_at "
+             "OR (t.created_at = today_visits.created_at AND t.mrn <= today_visits.mrn)))", ()),
+        ])
     return True
 
 
@@ -132,19 +142,22 @@ def _allergies() -> dict:
 def today_patients(day: str) -> list:
     """Pasien yang ditandai berkunjung pada tanggal `day` (urut sesuai waktu ditambahkan)."""
     _init_table()
-    order = [r[0] for r in _query(
-        "SELECT mrn FROM today_visits WHERE visit_date = ? ORDER BY created_at, mrn", (day,))]
+    order = _query(
+        "SELECT mrn, queue_no FROM today_visits WHERE visit_date = ? "
+        "ORDER BY queue_no, created_at, mrn", (day,))
     if not order:
         return []
     info = {p["mrn"]: p for p in _overview()}
-    return [info[m] for m in order if m in info]
+    return [{**info[m], "queue_no": q} for m, q in order if m in info]
 
 
 def _add_today(mrns: list, by: str):
     _init_table()
     day = today_str()
-    _write([("INSERT OR IGNORE INTO today_visits (visit_date, mrn, added_by) VALUES (?, ?, ?)",
-             (day, m, by)) for m in mrns])
+    # Nomor antrean = nomor berikutnya hari itu, berurutan sesuai urutan `mrns` (urutan check-in).
+    _write([("INSERT OR IGNORE INTO today_visits (visit_date, mrn, added_by, queue_no) VALUES "
+             "(?, ?, ?, (SELECT COALESCE(MAX(queue_no), 0) + 1 FROM today_visits WHERE visit_date = ?))",
+             (day, m, by, day)) for m in mrns])
     today_patients.clear()
     for m in mrns:
         audit_log.log("pasien_hari_ini_tambah", m)
@@ -205,7 +218,8 @@ def _page_list(can_edit: bool):
             with st.form("form_add_today", clear_on_submit=True):
                 chosen = st.multiselect("Pilih pasien (ketik untuk mencari)", list(labels),
                                         format_func=lambda m: labels[m])
-                if st.form_submit_button("Tambahkan ke hari ini") and chosen:
+                st.caption("Nomor antrean diberikan berurutan sesuai urutan pasien dipilih (check-in).")
+                if st.form_submit_button("Check-in & beri nomor antrean") and chosen:
                     _add_today(chosen, (current_user() or {}).get("username", ""))
                     st.rerun()
 
@@ -218,10 +232,6 @@ def _page_list(can_edit: bool):
     _rows_list(rows, day, can_edit)
 
 
-# Ganti fungsi _rows_list di components/today_visits.py dengan versi ini.
-# Hasil: pasien aktif (belum selesai) di atas sesuai urutan datang; pasien "selesai"
-# otomatis turun ke bawah setelah divider. Nomor antrean (tiket) tetap, tidak berubah.
-
 def _render_row(no, r, statuses, allergies, day, can_edit, notice, done=False):
     mrn = r["mrn"]
     icon, label = STATUS[statuses.get(mrn, "menunggu")]
@@ -229,7 +239,7 @@ def _render_row(no, r, statuses, allergies, day, can_edit, notice, done=False):
     allergy = allergies.get(mrn, "")
     with st.container(border=not done):
         cols = st.columns([2.6, 6, 1.5, 1.7, 0.7] if can_edit else [2.6, 6, 1.5, 1.7])
-        cols[0].markdown(f"**{no}** · {icon} {label}")
+        cols[0].markdown(f"**No. {no}** · {icon} {label}")
         info = (f"**{r['name']}** · `{mrn}` · {r.get('sex') or '—'} · lahir {dob} · "
                 + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
         cols[1].markdown(f":gray[{info}]" if done else info)
@@ -262,7 +272,7 @@ def _rows_list(rows: list, day: str, can_edit: bool):
     count = Counter(statuses.get(r["mrn"], "menunggu") for r in rows)
     st.caption(" · ".join(f"{STATUS[k][0]} {STATUS[k][1]}: {count[k]}" for k in STATUS if count[k]))
 
-    numbered = list(enumerate(rows, start=1))          # nomor tiket tetap
+    numbered = [(r.get("queue_no") or n, r) for n, r in enumerate(rows, start=1)]  # nomor antrean tetap
     is_done = lambda r: statuses.get(r["mrn"]) == "selesai"
     active = [(n, r) for n, r in numbered if not is_done(r)]
     done = [(n, r) for n, r in numbered if is_done(r)]
@@ -276,9 +286,6 @@ def _rows_list(rows: list, day: str, can_edit: bool):
         st.markdown(f"##### ✅ Sudah selesai diperiksa ({len(done)})")
         for n, r in done:
             _render_row(n, r, statuses, allergies, day, can_edit, notice, done=True)
-
-# OPSIONAL (agar urutan berpindah sendiri tanpa klik, status di-cache 10 dtk):
-# _rows_list = audit_log.live(_rows_list, every=10)
 
 
 def render_today_page():

@@ -4,6 +4,7 @@ keluarga, alergi, obat, kebiasaan) ada di modules/patient_profile.py. Setelah di
 menganalisis data kunjungan, hasilnya tersimpan sebagai draft dan gejala terisi ke Keluhan
 Utama. Temuan SNOMED CT (diagnosis dugaan, faktor risiko) baru masuk ke Data Pasien setelah
 disetujui (siapa pun yang login; tercatat di log aktivitas)."""
+import re
 from datetime import date
 
 import streamlit as st
@@ -15,6 +16,31 @@ from database import (add_supporting, approve_anamnesis, delete_supporting, get_
 from modules.ai_agent import (FINAL_REQUEST_TEXT, friendly_error, get_candidates,
                               parse_response, run_agent)
 from modules.patient_context import build_patient_context
+
+
+# Gerbang mutu masukan: AI tidak dipanggil bila keluhan/RPS kosong atau asal-asalan (mis. "test test").
+_JUNK = {"tes", "test", "testing", "coba", "dummy", "asd", "asdf", "qwe", "qwerty", "abc", "xxx",
+         "lorem", "ipsum"}
+MIN_SUBJECTIVE_WORDS = 2
+
+
+def _plausible_words(text: str) -> set:
+    words = set()
+    for w in re.findall(r"[a-zA-Z]{3,}", (text or "").lower()):
+        if (w in _JUNK or not re.search(r"[aeiou]", w)
+                or re.search(r"(.)\1{2,}", w) or re.search(r"[^aeiou]{5,}", w)):
+            continue
+        words.add(w)
+    return words
+
+
+def input_problem(keluhan: str, rps: str):
+    """None bila layak dianalisis; selain itu pesan untuk pengguna."""
+    if len(_plausible_words(f"{keluhan} {rps}")) < MIN_SUBJECTIVE_WORDS:
+        return ("Analisis AI belum dijalankan: keluhan utama / riwayat penyakit sekarang masih kosong "
+                "atau belum bermakna (minimal 2 kata, mis. \"nyeri dada sejak 2 jam\"). "
+                "Data sudah tersimpan.")
+    return None
 
 
 SUPPORT_CATEGORIES = ["Laboratorium", "EKG", "Ekokardiografi", "Rontgen Thorax", "Lainnya"]
@@ -120,12 +146,14 @@ def render_clinical_form(vno: str) -> None:
 
     flash = st.session_state.pop(f"cf_flash_{vno}", None)
     if flash:
-        (st.success if flash[0] == "success" else st.error)(flash[1])
+        {"success": st.success, "warning": st.warning}.get(flash[0], st.error)(flash[1])
 
     with st.form(f"form_klinis_{vno}"):
         st.markdown("#### Anamnesis")
         st.caption("Riwayat tetap (penyakit dahulu, keluarga, alergi, obat, kebiasaan) diisi di "
                    "**Riwayat tetap pasien** pada bagian atas halaman.")
+        keluhan = st.text_area("Keluhan utama (diisi perawat)", value=an.get("keluhan_utama", ""),
+                               height=70, placeholder="Contoh: nyeri dada sejak 2 jam, menjalar ke lengan kiri")
         rps = st.text_area("Riwayat penyakit sekarang", value=an.get("rps", ""), height=110)
 
         st.markdown("#### Pemeriksaan Fisik")
@@ -166,18 +194,23 @@ def render_clinical_form(vno: str) -> None:
                     "pe_jantung": pe_jantung.strip(), "pe_paru": pe_paru.strip(),
                     "pe_lain": pe_lain.strip()}
         new_support = pj_text.strip()
-        if not (rps.strip() or _filled(physical) or new_support or list_supporting(vno)):
+        if not (keluhan.strip() or rps.strip() or _filled(physical) or new_support or list_supporting(vno)):
             st.warning("Isi minimal salah satu: anamnesis, pemeriksaan fisik, atau data penunjang.")
         else:
-            update_patient(vno, anamnesis={**an, "rps": rps.strip()}, physical_exam=physical)
+            update_patient(vno, anamnesis={**an, "keluhan_utama": keluhan.strip(), "rps": rps.strip()},
+                           physical_exam=physical)
             audit_log.log("anamnesis_ubah", vno)
             audit_log.log("fisik_ubah", vno, "tanda vital & pemeriksaan fisik")
             if new_support:
                 add_supporting(vno, category, new_support, recorded.isoformat())
                 audit_log.log("penunjang_tambah", vno, category)
                 st.session_state[f"cf_n_{vno}"] = n + 1
-            st.session_state[f"cf_flash_{vno}"] = (
-                _analyze(vno) if b_analyze else ("success", "Data klinis tersimpan."))
+            if not b_analyze:
+                flash = ("success", "Data klinis tersimpan.")
+            else:
+                problem = input_problem(keluhan, rps)
+                flash = ("warning", problem) if problem else _analyze(vno)
+            st.session_state[f"cf_flash_{vno}"] = flash
             st.rerun()
     _supporting_list(vno)
     _approval_block(vno)

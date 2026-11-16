@@ -1,11 +1,15 @@
+import json
 from datetime import date, datetime
 
-from database import get_patient, list_anamnesis_results, list_supporting
+from database import _query, get_patient, get_visit, list_anamnesis_results, list_supporting
 from modules.patient_profile import get_profile
 
 
-MAX_CONTEXT_CHARS = 3500
+MAX_CONTEXT_CHARS = 4500
 MAX_SUPPORTING_ITEMS = 8
+MAX_PREVIOUS_VISITS = 2
+PREVIOUS_SUMMARY_CHARS = 350
+PREVIOUS_NOTE_CHARS = 250
 
 
 # "rps" milik kunjungan; sisanya riwayat tetap milik pasien (modules/patient_profile.py).
@@ -67,6 +71,58 @@ def format_vitals(pe: dict) -> str:
     return ", ".join(parts)
 
 
+def _fmt(iso) -> str:
+    try:
+        return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        return str(iso)[:10]
+
+
+def _previous_visit_lines(vno: str) -> list:
+    """Kunjungan SEBELUM kunjungan ini: tanggal, keluhan/RPS yang dicatat, dan kesimpulan yang
+    sudah disetujui dokter. Hanya pembanding; AI diminta menyebut tanggalnya bila relevan."""
+    visit = get_visit(vno)
+    if not visit:
+        return []
+    rows = _query(
+        "SELECT v.visit_no, v.visit_date, v.anamnesis, r.summary, r.codes FROM visits v "
+        "LEFT JOIN anamnesis_results r ON r.mrn = v.visit_no AND r.approved = 1 "
+        "WHERE v.mrn = ? AND v.visit_no != ? AND v.created_at <= ? "
+        "ORDER BY v.created_at DESC, r.id DESC",
+        (visit["mrn"], vno, visit["created_at"]),
+    )
+    out, seen = [], set()
+    for v_no, v_date, an_raw, summary, codes in rows:
+        if v_no in seen:
+            continue
+        seen.add(v_no)
+        try:
+            an = json.loads(an_raw or "{}")
+        except Exception:
+            an = {}
+        parts = []
+        note = " ".join(f"{an.get('keluhan_utama', '')} {an.get('rps', '')}".split())[:PREVIOUS_NOTE_CHARS]
+        if note:
+            parts.append(f"keluhan/RPS: {note}")
+        if summary:
+            parts.append("kesimpulan disetujui: " + " ".join(str(summary).split())[:PREVIOUS_SUMMARY_CHARS])
+            try:
+                terms = ", ".join(c.get("term", "") for c in json.loads(codes or "[]") if c.get("term"))[:200]
+            except Exception:
+                terms = ""
+            if terms:
+                parts.append(f"temuan: {terms}")
+        if parts:
+            out.append(f"- Kunjungan {_fmt(v_date)}: " + "; ".join(parts))
+        if len(out) >= MAX_PREVIOUS_VISITS:
+            break
+    if not out:
+        return []
+    return ["RIWAYAT KUNJUNGAN SEBELUMNYA (pembanding; keluhan hari ini tetap dari data kunjungan ini). "
+            "Bila relevan dengan keluhan hari ini (mis. rawat inap, serangan jantung, tindakan), "
+            "sebut tanggal kunjungannya di kesimpulan, mis. \"pada kunjungan 10/11/2026 tercatat ...\":"] + out
+
+
 def build_patient_context(mrn: str) -> str:
     """Ringkasan data pasien tersimpan (untuk konteks AI). '' jika belum ada data."""
     patient = get_patient(mrn)
@@ -83,6 +139,10 @@ def build_patient_context(mrn: str) -> str:
         identity.append(f"jenis kelamin {patient['sex']}")
     if identity:
         lines.append("Identitas: " + ", ".join(identity))
+
+    manual = str((patient.get("anamnesis") or {}).get("keluhan_utama", "")).strip()
+    if manual:
+        lines.append(f"Keluhan utama (ditulis perawat): {manual}")
 
     complaints = patient.get("chief_complaints") or []
     if complaints:
@@ -131,6 +191,8 @@ def build_patient_context(mrn: str) -> str:
     if previous:
         summary = " ".join(previous[0]["summary"].split())[:600]
         lines.append(f"Kesimpulan anamnesis yang disetujui sebelumnya ({previous[0]['created_at']}): {summary}")
+
+    lines.extend(_previous_visit_lines(mrn))
 
     text = "\n".join(lines).strip()
     return text[:MAX_CONTEXT_CHARS]
