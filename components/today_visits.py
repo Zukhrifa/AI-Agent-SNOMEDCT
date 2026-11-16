@@ -11,10 +11,13 @@ from auth.session import current_user
 from components.nav import go_to_patient_data, open_roomchat_for_mrn
 from database import (_NOW, _query, _write, create_visit, list_patient_overview,
                       list_visits)
+from modules.patient_profile import allergy_map, get_profile
 
 TODAY_VIEW_ROLES = ("admin", "dokter", "perawat")   # peran yang melihat menu Kunjungan
 TODAY_EDIT_ROLES = ("admin",)                       # peran yang boleh mengatur daftar hari ini
 SIDEBAR_MAX = 8                                     # tidak dipakai lagi; dibiarkan agar impor lama aman
+
+_fragment = getattr(st, "fragment", None) or (lambda fn: fn)
 
 
 def today_str() -> str:
@@ -53,6 +56,11 @@ def _overview() -> list:
 
 
 @st.cache_data(ttl=15, show_spinner=False)
+def _allergies() -> dict:
+    return allergy_map()
+
+
+@st.cache_data(ttl=15, show_spinner=False)
 def today_patients(day: str) -> list:
     """Pasien yang ditandai berkunjung pada tanggal `day` (urut sesuai waktu ditambahkan)."""
     _init_table()
@@ -84,7 +92,7 @@ def _fmt_date(iso) -> str:
     try:
         return datetime.strptime(str(iso)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
     except Exception:
-        return iso or "-"
+        return "—"
 
 
 def _resolve_visit(mrn: str, day: str):
@@ -139,26 +147,44 @@ def _page_list(can_edit: bool):
                 if is_today else "Tidak ada pasien yang tercatat pada tanggal ini.")
         return
 
+    _rows_list(rows, day, can_edit)
+
+
+def _rerun_local():
+    """Muat ulang hanya daftar kartu (Streamlit baru); jika tidak didukung, seluruh halaman."""
+    try:
+        st.rerun(scope="fragment")
+    except Exception:
+        st.rerun()
+
+
+@_fragment
+def _rows_list(rows: list, day: str, can_edit: bool):
+    """Kartu pasien berdropdown (sama seperti Data Pasien): klik header untuk membuka riwayat tetap dan
+    riwayat kunjungan; hanya satu kartu terbuka sekaligus."""
+    import components.patient_data as pd        # impor saat dipakai: patient_data juga mengimpor modul ini
+    st.markdown(pd._CARD_CSS, unsafe_allow_html=True)
     notice = st.empty()
-    widths = [3, 2, 2, 2, 2, 2, 1] if can_edit else [3, 2, 2, 2, 2, 2]
-    heads = ["Nama", "No. RM", "Jenis kelamin", "Tanggal lahir", "", ""] + ([""] if can_edit else [])
-    with st.container(border=True):
-        for col, label in zip(st.columns(widths), heads):
-            col.caption(label)
-        for r in rows:
-            mrn = r["mrn"]
-            cols = st.columns(widths)
-            cols[0].write(r["name"])
-            cols[1].write(mrn)
-            cols[2].write(r.get("sex") or "—")
-            cols[3].write(_fmt_date(r.get("birth_date")))
-            if cols[4].button("📂 Data", key=f"today_data_{mrn}", use_container_width=True):
+    allergies = _allergies()
+    for r in rows:
+        mrn = r["mrn"]
+        is_open = st.session_state.get("tv_open_mrn") == mrn
+        dob = _fmt_date(r.get("birth_date")) if r.get("birth_date") else "—"
+        allergy = allergies.get(mrn, "")
+        with st.container(border=True, key=f"pcard_{mrn}"):
+            cols = st.columns([7, 1.5, 1.7, 0.7] if can_edit else [7, 1.5, 1.7])
+            label = (f"{'▾' if is_open else '▸'}  **{r['name']}** · `{mrn}` · {r.get('sex') or '—'} · "
+                     f"lahir {dob} · " + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
+            if cols[0].button(label, key=f"pc_toggle_{mrn}", use_container_width=True):
+                st.session_state["tv_open_mrn"] = None if is_open else mrn
+                _rerun_local()
+            if cols[1].button("📂 Data", key=f"today_data_{mrn}", use_container_width=True):
                 v = _resolve_visit(mrn, day)
                 if v:
                     go_to_patient_data(v["visit_no"])
                     st.rerun()
                 notice.warning("Tidak ada kunjungan pada tanggal ini.")
-            if cols[5].button("💬 Roomchat", key=f"today_chat_{mrn}", use_container_width=True):
+            if cols[2].button("💬 Roomchat", key=f"today_chat_{mrn}", use_container_width=True):
                 v = _resolve_visit(mrn, day)
                 if not v:
                     notice.warning("Tidak ada kunjungan pada tanggal ini.")
@@ -167,10 +193,21 @@ def _page_list(can_edit: bool):
                 else:
                     open_roomchat_for_mrn(v["visit_no"])
                     st.rerun()
-            if can_edit and cols[6].button("🗑", key=f"today_del_{mrn}",
+            if can_edit and cols[3].button("🗑", key=f"today_del_{mrn}",
                                            help="Keluarkan dari daftar hari ini"):
                 _remove_today(mrn)
                 st.rerun()
+
+            if is_open:                          # data baru dimuat saat kartu dibuka
+                with st.container(key=f"{'pdetail' if pd._OVERLAY else 'pinline'}_{mrn}"):
+                    st.markdown("**Riwayat tetap**")
+                    pd._profile_view(get_profile(mrn))
+                    st.markdown("**Riwayat kunjungan**")
+                    visits = list_visits(mrn)
+                    if not visits:
+                        st.caption("Belum ada kunjungan.")
+                    for v in visits:
+                        pd._render_result_row(f"tvv_{mrn}", v, pd._snippet(v["summary"]))
 
 
 def render_today_page():

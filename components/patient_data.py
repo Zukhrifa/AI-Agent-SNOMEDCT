@@ -419,6 +419,8 @@ def _render_result_row(prefix: str, item: dict, caption: str):
             st.rerun()
 
 
+_OVERLAY = True      # False = dropdown biasa (mendorong kartu di bawahnya)
+
 _CARD_CSS = """<style>
 [class*="st-key-pc_toggle_"] button {
     justify-content: flex-start !important; border: none !important;
@@ -427,6 +429,13 @@ _CARD_CSS = """<style>
 [class*="st-key-pc_toggle_"] button div,
 [class*="st-key-pc_toggle_"] button p {
     text-align: left !important; justify-content: flex-start !important; width: 100%;
+}
+[class*="st-key-pcard_"] { position: relative; }
+[class*="st-key-pdetail_"] {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 60; margin-top: 4px;
+    background: #ffffff; border: 1px solid #d9dee7; border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.18); padding: 12px 16px;
+    max-height: 65vh; overflow-y: auto;
 }
 </style>"""
 
@@ -451,15 +460,15 @@ def _patient_card(r: dict, allergy: str):
             st.rerun()
 
         if is_open:                          # data baru dimuat saat kartu dibuka
-            st.markdown("**Riwayat tetap**")
-            _profile_view(get_profile(mrn))
-            st.markdown("**Riwayat kunjungan**")
-            visits = list_visits(mrn)
-            if not visits:
-                st.caption("Belum ada kunjungan.")
-            for v in visits:
-                _render_result_row(f"pcv_{mrn}", v, _snippet(v["summary"]))
-
+            with st.container(key=f"{'pdetail' if _OVERLAY else 'pinline'}_{mrn}"):
+                st.markdown("**Riwayat tetap**")
+                _profile_view(get_profile(mrn))
+                st.markdown("**Riwayat kunjungan**")
+                visits = list_visits(mrn)
+                if not visits:
+                    st.caption("Belum ada kunjungan.")
+                for v in visits:
+                    _render_result_row(f"pcv_{mrn}", v, _snippet(v["summary"]))
 
 @_fragment
 def _cards_list(rows: list, allergies: dict):
