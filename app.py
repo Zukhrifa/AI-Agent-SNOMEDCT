@@ -11,7 +11,6 @@ from components.today_visits import render_today_page
 from database import (
     get_all_consultations,
     save_or_update_consultation,
-    set_visit_archived,
     update_patient_name,
 )
 from modules.ai_agent import DEFAULT_QUICK_ACTIONS
@@ -101,20 +100,6 @@ def render_roomchat_view():
                 audit_log.log("chat_clear", active["mrn"])
                 st.session_state.patient_list = get_all_consultations()
                 st.rerun()
-
-            st.divider()
-
-            # Arsipkan: roomchat ini disembunyikan dari sidebar, tidak ada yang dihapus
-            if st.button("📦 Arsipkan Roomchat", key="btn_arsip_pasien", use_container_width=True):
-                set_visit_archived(active["mrn"], True)
-                audit_log.log("pasien_arsip", active["mrn"])
-                st.session_state.active_patient = None
-                st.session_state.messages = []
-                st.session_state.quick_actions = []
-                st.session_state.pending_input = None
-                st.session_state.patient_list = get_all_consultations()
-                st.rerun()
-            st.caption("Roomchat disembunyikan dari sidebar; data tetap ada di Data Pasien dan bisa diaktifkan kembali.")
 
     render_context_panel(active["mrn"])
     render_chat_room()

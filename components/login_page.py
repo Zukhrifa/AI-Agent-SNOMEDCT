@@ -27,22 +27,27 @@ _BRAND = """
 
 def render_login_page(setup_error: str = "") -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
-    _, col, _ = st.columns([1, 1.15, 1])
-    with col:
-        st.markdown(_BRAND, unsafe_allow_html=True)
-        if setup_error:
-            st.error(setup_error)
-            return
-        with st.form("login_form", clear_on_submit=False):
-            username = st.text_input("Username", placeholder="mis. admin", autocomplete="username")
-            password = st.text_input("Password", type="password", placeholder="Password Anda",
-                                     autocomplete="current-password")
-            submitted = st.form_submit_button("Masuk", type="primary", use_container_width=True)
-        st.caption("Belum punya akun? Hubungi admin untuk dibuatkan akun.")
-        if submitted:
-            with st.spinner("Memeriksa..."):
-                user, error = authenticate(username, password)
-            if user:
-                login_user(user)
-                st.rerun()
-            st.error(error)
+    holder = st.empty()          # seluruh form di sini, agar bisa dibersihkan sebelum pindah halaman
+    user, error = None, None
+    with holder.container():
+        _, col, _ = st.columns([1, 1.15, 1])
+        with col:
+            st.markdown(_BRAND, unsafe_allow_html=True)
+            if setup_error:
+                st.error(setup_error)
+                return
+            with st.form("login_form", clear_on_submit=False):
+                username = st.text_input("Username", placeholder="mis. admin", autocomplete="username")
+                password = st.text_input("Password", type="password", placeholder="Password Anda",
+                                         autocomplete="current-password")
+                submitted = st.form_submit_button("Masuk", type="primary", use_container_width=True)
+            st.caption("Belum punya akun? Hubungi admin untuk dibuatkan akun.")
+            if submitted:
+                with st.spinner("Memeriksa..."):
+                    user, error = authenticate(username, password)
+                if not user:
+                    st.error(error)
+    if user:
+        login_user(user)
+        holder.empty()           # hapus form login dulu, supaya tidak tampak pudar di halaman berikutnya
+        st.rerun()

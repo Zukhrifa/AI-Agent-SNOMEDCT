@@ -29,6 +29,7 @@ from modules.ai_agent import (
     REGENERATE_REQUEST_TEXT,
     friendly_error,
     get_candidates,
+    input_problem,
     parse_response,
     run_agent,
     strip_data_block,
@@ -605,8 +606,16 @@ def render_chat_room():
 
             if has_user_msg and not last_final:
                 if st.button("📋 Minta Kesimpulan Sekarang", key="ask_final"):
-                    send_user_message(FINAL_REQUEST_TEXT)
-                    st.rerun()
+                    record = get_patient(patient["mrn"]) or {}
+                    an = record.get("anamnesis") or {}
+                    complaints = " ".join(c.get("term", "") for c in record.get("chief_complaints") or [])
+                    problem = input_problem(an.get("keluhan_utama", ""), an.get("rps", ""), complaints,
+                                            *conversation_texts(st.session_state.messages))
+                    if problem:
+                        st.warning(problem)
+                    else:
+                        send_user_message(FINAL_REQUEST_TEXT)
+                        st.rerun()
 
     # Kotak input utama (tombol mikrofon disisipkan ke dalamnya oleh render_voice_button)
     placeholder = "Ketik atau ucapkan jawaban pasien..." if active_q else "Ketik atau ucapkan keluhan / jawaban pasien..."

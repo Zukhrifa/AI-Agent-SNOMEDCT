@@ -54,6 +54,32 @@ REGENERATE_REQUEST_TEXT = (
     "(jawaban pasien, data pasien tersimpan, tanda vital, pemeriksaan fisik, dan data penunjang). "
     "Pertimbangkan diagnosis alternatif serta koreksi temuan dan kodenya. Jangan mengulang kesimpulan yang sama."
 )
+# Gerbang mutu masukan: tanpa keluhan/jawaban yang bermakna, AI tidak dipanggil untuk kesimpulan.
+MIN_FACT_WORDS = 2
+_JUNK_WORDS = {"tes", "test", "testing", "coba", "dummy", "asd", "asdf", "qwe", "qwerty", "abc", "xxx",
+               "lorem", "ipsum"}
+INSUFFICIENT_TEXT = ("Data belum memadai untuk kesimpulan: belum ada keluhan atau jawaban pasien yang "
+                     "bermakna (minimal 2 kata, mis. \"nyeri dada sejak 2 jam\").")
+
+
+def plausible_words(text: str) -> set:
+    words = set()
+    for w in re.findall(r"[a-zA-Z]{3,}", (text or "").lower()):
+        if (w in _JUNK_WORDS or not re.search(r"[aeiou]", w)
+                or re.search(r"(.)\1{2,}", w) or re.search(r"[^aeiou]{5,}", w)):
+            continue
+        words.add(w)
+    return words
+
+
+def input_problem(*texts):
+    """None bila ada cukup kata bermakna; selain itu pesan untuk pengguna."""
+    words = set()
+    for t in texts:
+        words |= plausible_words(t)
+    return None if len(words) >= MIN_FACT_WORDS else INSUFFICIENT_TEXT
+
+
 VALID_CATEGORIES = ("gejala", "faktor_risiko", "diagnosis")
 DEFAULT_QUICK_ACTIONS = [
     "Bagaimana karakteristik nyeri dada yang dirasakan?",
@@ -76,19 +102,20 @@ STATUS AGENT (dihitung sistem, andalkan ini):
 {{TOOLS_BLOCK}}
 ALUR:
 A. Jika informasi belum cukup -> status "ask": tanggapi jawaban terakhir (maksimal 3 kalimat), lalu beri 3 pertanyaan lanjutan BARU yang singkat tentang item yang BELUM digali pada checklist. Jika ada tanda bahaya KRITIS, sebutkan di awal tanggapan dan sarankan evaluasi segera, lalu tetap gali informasi yang paling menentukan.
-B. Status "final" jika (1) item inti checklist (onset, quality, radiation, duration, associated, risk_factors) sudah terisi dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan, atau (3) ada tanda bahaya kritis dan data sudah cukup untuk dugaan awal. Tulis kesimpulan ringkas dengan struktur:
+B. Status "final" HANYA jika ada keluhan/gejala yang bermakna dari "Jawaban pasien", catatan bebas, atau DATA PASIEN TERSIMPAN, dan (1) item inti checklist (onset, quality, radiation, duration, associated, risk_factors) sudah terisi dan topik utama sudah tergali, atau (2) dokter meminta kesimpulan, atau (3) ada tanda bahaya kritis dan data sudah cukup untuk dugaan awal. Tulis kesimpulan ringkas dengan struktur:
 Ringkasan gejala: ...
 Dugaan diagnosis (urut dari paling mungkin, maksimal 3): ...
 Dasar: ...
 Tanda bahaya / saran pemeriksaan lanjutan: ...
-Jika data belum memadai tetapi dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
+Jika data terbatas tetapi bermakna dan dokter meminta kesimpulan, sebutkan keterbatasannya. Jangan menyatakan diagnosis pasti; gunakan kata "dugaan" atau "kemungkinan".
+D. Status "insufficient" jika data TIDAK memadai untuk dugaan apa pun: tidak ada keluhan/gejala yang bermakna (kosong, asal/placeholder seperti "test" atau "asdf", tidak terkait kesehatan, atau tidak bisa dinilai), BAIK saat anamnesis berjalan MAUPUN saat dokter meminta kesimpulan. Jangan membuat dugaan diagnosis dan jangan mengarang gejala. Tulis maksimal 3 kalimat tentang informasi apa yang masih diperlukan, lalu beri 3 pertanyaan awal yang singkat di "quick_actions".
 C. Jika dokter menyatakan kesimpulan sebelumnya TIDAK akurat: buat kesimpulan BARU (status "final") yang berbeda dan lebih sesuai. Tinjau ulang semua data, pertimbangkan diagnosis alternatif, perbaiki findings. Jangan mengulang kesimpulan yang sama.
 
 TEMUAN UNTUK KODE SNOMED CT:
 - Anda TIDAK menulis kode angka. Sebutkan konsep klinisnya di "findings"; sistem akan mencari kode SNOMED CT terdekat dari database.
 - Setiap temuan: "label" (istilah Indonesia), "term_en" (istilah medis Inggris baku, sependek mungkin, mis. "chest pain", "hypertension", "angina pectoris"), "kategori": "gejala" atau "faktor_risiko" atau "diagnosis".
-- Status "ask": findings harus [].
-- Status "final": WAJIB isi findings: minimal 1 gejala dan 1-3 dugaan diagnosis, ditambah faktor risiko bila ada. Walau tidak pasti, tetap tulis dugaan yang paling mendekati (di teks tandai sebagai dugaan). Jangan mengosongkan findings.
+- Status "ask" dan "insufficient": findings harus [].
+- Status "final" (hanya bila data bermakna): WAJIB isi findings: minimal 1 gejala dan 1-3 dugaan diagnosis, ditambah faktor risiko bila ada. Walau belum pasti, tetap tulis dugaan yang paling mendekati (di teks tandai sebagai dugaan). Jangan mengosongkan findings pada status final.
 
 Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulisan term_en; pakai bila relevan):
 {{REFERENSI}}
@@ -96,8 +123,8 @@ Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulis
 FORMAT OUTPUT (wajib persis, tanpa teks lain):
 [teks tanggapan atau kesimpulan]
 {{DELIM}}
-{"status": "ask atau final", "covered": ["onset", "quality"], "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
-Pada status "final", "quick_actions" harus []. "covered" = kunci checklist yang sudah digali (kumulatif) dari: onset, provocation, quality, radiation, severity, duration, associated, risk_factors, history, medications.
+{"status": "ask atau final atau insufficient", "covered": ["onset", "quality"], "quick_actions": ["...", "...", "..."], "findings": [{"label": "nyeri dada", "term_en": "chest pain", "kategori": "gejala"}]}
+Pada status "final", "quick_actions" harus []. Pada status "insufficient", isi "quick_actions" dengan 3 pertanyaan awal. "covered" = kunci checklist yang sudah digali (kumulatif) dari: onset, provocation, quality, radiation, severity, duration, associated, risk_factors, history, medications.
 Baris pemisah harus persis "{{DELIM}}" (tiga tanda sama dengan di kiri DAN kanan) pada baris tersendiri, tidak boleh dihilangkan atau diubah."""
 TOOLS_BLOCK_TEMPLATE = """
 TOOL (opsional, hanya bila perlu):
@@ -105,7 +132,7 @@ TOOL (opsional, hanya bila perlu):
 Aturan tool: tanda bahaya, checklist, dan data pasien SUDAH tersedia di atas, jadi jangan memanggil tool untuk hal itu. Panggil tool HANYA untuk: menghitung skor risiko (calculate_heart_score) bila datanya cukup, mencari kode untuk istilah spesifik, melihat detail data lengkap, atau mencari isi SOP/pedoman (search_guidelines). Jika dokter bertanya tentang SOP, prosedur, pemeriksaan, atau tatalaksana dan tool search_guidelines tersedia, panggil tool itu lebih dulu dan jawab HANYA berdasarkan kutipan yang dikembalikan. Bila kutipan relevan, tulis rekomendasinya beserta sumbernya di teks, mis. \"Berdasarkan <nama dokumen>, hal. X, dokter perlu ...\" atau (Sumber: nama dokumen, hal. X); nomor halaman WAJIB disertakan. Jika dokter bertanya soal SOP/pedoman tetapi tidak ada kutipan yang relevan, katakan terus terang bahwa tidak ditemukan di dokumen pedoman, dan jangan mengarang isi dokumen. Maksimal {{MAX_CALLS}} tool per langkah. Untuk memanggil tool, keluarkan HANYA (tanpa teks sebelum pemisah):
 {{DELIM}}
 {"status": "tool", "calls": [{"tool": "nama_tool", "args": {}}]}
-Sebagian besar giliran TIDAK memerlukan tool: langsung jawab (status ask atau final).
+Sebagian besar giliran TIDAK memerlukan tool: langsung jawab (status ask, final, atau insufficient).
 """
 TRANSLATE_PROMPT = """Anda penerjemah istilah medis untuk pencarian SNOMED CT.
 Ubah masukan (bahasa Indonesia atau bahasa awam lain) menjadi 1 sampai 3 istilah medis berbahasa Inggris yang baku dan sependek mungkin, bergaya SNOMED CT.
@@ -572,6 +599,16 @@ def parse_response(raw: str, candidates: dict = None, force_final: bool = False)
 
     if data:
         result["covered"] = clean_covered(data.get("covered"))
+
+    if status == "insufficient":      # data tidak memadai: bukan kesimpulan, tanpa kode/temuan
+        result["status"] = "insufficient"
+        items = data.get("quick_actions")
+        cleaned = [str(x).strip() for x in items if str(x).strip()] if isinstance(items, list) else []
+        if cleaned:
+            result["quick_actions"] = cleaned[:3]
+        if not result["text"]:
+            result["text"] = INSUFFICIENT_TEXT
+        return result
 
     if status == "final":
         return _as_final(result, map_findings_to_codes(data.get("findings")), candidates)

@@ -4,7 +4,6 @@ keluarga, alergi, obat, kebiasaan) ada di modules/patient_profile.py. Setelah di
 menganalisis data kunjungan, hasilnya tersimpan sebagai draft dan gejala terisi ke Keluhan
 Utama. Temuan SNOMED CT (diagnosis dugaan, faktor risiko) baru masuk ke Data Pasien setelah
 disetujui (siapa pun yang login; tercatat di log aktivitas)."""
-import re
 from datetime import date
 
 import streamlit as st
@@ -13,34 +12,9 @@ from auth import audit_log
 from database import (add_supporting, approve_anamnesis, delete_supporting, get_patient,
                       list_anamnesis_results, list_supporting, save_anamnesis_result,
                       update_patient)
-from modules.ai_agent import (FINAL_REQUEST_TEXT, friendly_error, get_candidates,
+from modules.ai_agent import (FINAL_REQUEST_TEXT, friendly_error, get_candidates, input_problem,
                               parse_response, run_agent)
 from modules.patient_context import build_patient_context
-
-
-# Gerbang mutu masukan: AI tidak dipanggil bila keluhan/RPS kosong atau asal-asalan (mis. "test test").
-_JUNK = {"tes", "test", "testing", "coba", "dummy", "asd", "asdf", "qwe", "qwerty", "abc", "xxx",
-         "lorem", "ipsum"}
-MIN_SUBJECTIVE_WORDS = 2
-
-
-def _plausible_words(text: str) -> set:
-    words = set()
-    for w in re.findall(r"[a-zA-Z]{3,}", (text or "").lower()):
-        if (w in _JUNK or not re.search(r"[aeiou]", w)
-                or re.search(r"(.)\1{2,}", w) or re.search(r"[^aeiou]{5,}", w)):
-            continue
-        words.add(w)
-    return words
-
-
-def input_problem(keluhan: str, rps: str):
-    """None bila layak dianalisis; selain itu pesan untuk pengguna."""
-    if len(_plausible_words(f"{keluhan} {rps}")) < MIN_SUBJECTIVE_WORDS:
-        return ("Analisis AI belum dijalankan: keluhan utama / riwayat penyakit sekarang masih kosong "
-                "atau belum bermakna (minimal 2 kata, mis. \"nyeri dada sejak 2 jam\"). "
-                "Data sudah tersimpan.")
-    return None
 
 
 SUPPORT_CATEGORIES = ["Laboratorium", "EKG", "Ekokardiografi", "Rontgen Thorax", "Lainnya"]
@@ -94,6 +68,8 @@ def _analyze(vno: str) -> tuple:
         return "error", "Data tersimpan, tetapi respons AI kosong. Coba lagi."
     result = parse_response(raw, get_candidates(FINAL_REQUEST_TEXT, []), force_final=True)
     text, codes = (result.get("text") or "").strip(), result.get("codes") or []
+    if result.get("status") != "final":      # AI menilai data tidak memadai: jangan simpan sebagai hasil
+        return "warning", (text or "Data belum memadai untuk kesimpulan.") + " (Data tersimpan; hasil AI tidak dibuat.)"
     if not text:
         return "error", "Data tersimpan, tetapi respons AI kosong. Coba lagi."
     save_anamnesis_result(vno, text, codes, approved=False)
@@ -209,7 +185,7 @@ def render_clinical_form(vno: str) -> None:
                 flash = ("success", "Data klinis tersimpan.")
             else:
                 problem = input_problem(keluhan, rps)
-                flash = ("warning", problem) if problem else _analyze(vno)
+                flash = (("warning", problem + " Data sudah tersimpan.") if problem else _analyze(vno))
             st.session_state[f"cf_flash_{vno}"] = flash
             st.rerun()
     _supporting_list(vno)

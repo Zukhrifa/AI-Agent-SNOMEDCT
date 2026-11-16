@@ -19,7 +19,6 @@ from database import (
     list_patient_overview,
     list_visits,
     patient_mrn_of,
-    set_visit_archived,
     update_patient,
     update_patient_name,
 )
@@ -368,7 +367,12 @@ def _profile_block(mrn: str, in_expander: bool = False):
 
     # Streamlit tidak mengizinkan expander di dalam expander, jadi di halaman kunjungan
     # (yang sudah dibungkus expander) formulirnya memakai kotak biasa.
-    box = st.container(border=True) if in_expander else st.expander("✏️ Ubah riwayat tetap")
+    if in_expander:
+        if not st.checkbox("✏️ Ubah riwayat tetap", key=f"pf_edit_{mrn}"):
+            return
+        box = st.container(border=True)
+    else:
+        box = st.expander("✏️ Ubah riwayat tetap")
     with box:
         with st.form(f"form_profile_{mrn}"):
             values = {}
@@ -383,7 +387,7 @@ def _profile_block(mrn: str, in_expander: bool = False):
             save_profile(mrn, values, user.get("full_name") or user.get("username") or "")
             audit_log.log("identitas_ubah", mrn, "riwayat tetap pasien")
             _rerun_local()
-    
+   
 
 
 # --- Daftar kartu pasien -----------------------------------------------------
@@ -572,11 +576,11 @@ def _page_visits(mrn: str):
         go_to_patient_data()
         st.rerun()
 
-    st.markdown("#### Riwayat tetap")
-    _profile_block(mrn)
-
     with st.expander("✏️ Ubah identitas pasien"):
         _tab_identity(mrn, patient)
+
+    st.markdown("#### Riwayat tetap")
+    _profile_block(mrn)
 
     st.markdown("#### Riwayat kunjungan")
     visits = list_visits(mrn)
@@ -590,18 +594,21 @@ def _previous_visits_block(mrn: str, vno: str):
     others = [v for v in list_visits(mrn) if v["visit_no"] != vno]
     if not others:
         return
-    with st.expander(f"Kunjungan lain pasien ini ({len(others)}) — hanya baca"):
+    with st.expander(f"Kunjungan sebelumnya ({len(others)}) — hanya baca"):
         for v in others:
             findings = (get_visit(v["visit_no"]) or {}).get("confirmed_findings") or []
-            st.markdown(f"**{_fmt_date(v['visit_date'])}** · `{v['visit_no']}`")
-            st.caption(_snippet(v["summary"], 400))
-            if findings:
-                st.markdown("Temuan SNOMED: " + "; ".join(
-                    f"{f.get('term', '')} `{f.get('conceptId', '')}`" for f in findings[:10]))
-            if st.button("Buka kunjungan ini", key=f"vprev_{v['visit_no']}"):
-                go_to_patient_data(v["visit_no"])
-                st.rerun()
-            st.divider()
+            with st.container(border=True):
+                c_text, c_btn = st.columns([8, 1.6])
+                c_text.markdown(f"**{_fmt_date(v['visit_date'])}** · `{v['visit_no']}`"
+                                + "".join(f" · {b}" for b in _visit_badges(v)))
+                note = _snippet(v["summary"], 220)
+                if findings:
+                    note += "  \n**Temuan SNOMED:** " + "; ".join(
+                        f"{f.get('term', '')} ({f.get('conceptId', '')})" for f in findings[:6])
+                c_text.caption(note)
+                if c_btn.button("Buka", key=f"vprev_{v['visit_no']}", use_container_width=True):
+                    go_to_patient_data(v["visit_no"])
+                    st.rerun()
 
 
 def _page_visit(mrn: str, vno: str):
@@ -612,25 +619,13 @@ def _page_visit(mrn: str, vno: str):
     audit_log.log_once("pasien_lihat", vno)
     archived = bool(visit.get("archived"))
 
-    col_info, col_chat, col_arc, col_back = st.columns([5, 2, 2, 2])
+    col_info, col_chat, col_back = st.columns([5, 2, 2])
     with col_info:
         st.subheader(patient["name"])
         st.caption(f"Kunjungan {_fmt_date(visit['visit_date'])} • No. {vno}" + (" • Roomchat diarsipkan" if archived else ""))
     with col_chat:
         if not archived and st.button("💬 Buka Roomchat", key="dp_open_chat", use_container_width=True):
             open_roomchat_for_mrn(vno)
-            st.rerun()
-    with col_arc:
-        if st.button("♻ Aktifkan roomchat" if archived else "📦 Arsipkan roomchat", key="dp_archive",
-                     use_container_width=True):
-            set_visit_archived(vno, not archived)
-            audit_log.log("pasien_aktif" if archived else "pasien_arsip", vno)
-            if not archived and (st.session_state.get("active_patient") or {}).get("mrn") == vno:
-                st.session_state.active_patient = None
-                st.session_state.messages = []
-                st.session_state.quick_actions = []
-                st.session_state.pending_input = None
-            _refresh_consultations()
             st.rerun()
     with col_back:
         if st.button("← Kembali", key="dp_back_visits", use_container_width=True):
