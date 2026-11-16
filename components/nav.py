@@ -27,21 +27,25 @@ _KEYS = ("v", "m", "k", "c", "t", "p")
 
 
 def _state() -> tuple:
+    """Roomchat aktif (c) hanya dihitung saat halaman roomchat: chat melayang di halaman lain juga memakai
+    active_patient, dan tidak boleh mengubah URL (kalau tidak, tombol Kembali browser 'terkunci')."""
     ss = st.session_state
-    return (ss.get("view", "chat"), ss.get("data_mrn"), ss.get("data_visit"),
-            (ss.get("active_patient") or {}).get("mrn"), ss.get("today_mrn"), ss.get("account_page"))
+    view = ss.get("view", "chat")
+    chat = (ss.get("active_patient") or {}).get("mrn") if view == "chat" else None
+    return (view, ss.get("data_mrn"), ss.get("data_visit"), chat, ss.get("today_mrn"), ss.get("account_page"))
 
 
 def _url_state() -> tuple:
     qp = st.query_params
-    return (qp.get("v", "chat"), qp.get("m"), qp.get("k"), qp.get("c"), qp.get("t"), qp.get("p"))
+    view = qp.get("v", "chat")
+    return (view, qp.get("m"), qp.get("k"), qp.get("c") if view == "chat" else None, qp.get("t"), qp.get("p"))
 
 
 def _apply(state: tuple):
     ss = st.session_state
     ss.view, ss.data_mrn, ss.data_visit = state[0], state[1], state[2]
     ss.today_mrn, ss.account_page = state[4], state[5]   # Kembali/Maju browser ikut memulihkan keduanya
-    if state[3] != (ss.get("active_patient") or {}).get("mrn"):
+    if state[0] == "chat" and state[3] != (ss.get("active_patient") or {}).get("mrn"):
         pat = next((c for c in ss.get("patient_list", []) if c["mrn"] == state[3]), None)
         ss.active_patient = pat
         ss.messages = pat.get("messages", []) if pat else []

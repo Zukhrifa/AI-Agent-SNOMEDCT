@@ -8,7 +8,9 @@ from auth.session import current_user
 from components.clinical_form import render_clinical_form
 from components.nav import go_to_chat, go_to_patient_data, open_roomchat_for_mrn
 from database import (
+    _NOW,
     _query,
+    _write,
     create_visit,
     ensure_patient,
     get_all_consultations,
@@ -27,6 +29,7 @@ from modules.patient_context import calc_age
 from modules.patient_profile import FIELDS as PROFILE_FIELDS, allergy_map, get_profile, has_data, save_profile
 from modules.rag_snomed import index_stats, lexical_search, search_terms
 from components.floating_chat import render_floating_chat
+from components import today_visits as _tv
 from components.today_visits import go_to_today
 
 
@@ -60,6 +63,32 @@ def _date_input(label: str, value: date, key: str):
 # ---------------------------------------------------------------------------
 # Bagian-bagian halaman kunjungan
 # ---------------------------------------------------------------------------
+def _save_identity(mrn: str):
+    """Dipanggil SEBELUM skrip berjalan ulang: halaman langsung menampilkan data baru tanpa rerun kedua.
+    Satu kali tulis ke database (nama di pasien & roomchat, tanggal lahir, jenis kelamin)."""
+    ss = st.session_state
+    name = (ss.get(f"id_name_{mrn}") or "").strip()
+    if not name:
+        ss["_id_msg"] = ("error", "Nama tidak boleh kosong.")
+        return
+    dob_val = ss.get(f"dob_{mrn}")
+    dob = "" if ss.get(f"dob_unknown_{mrn}") or not hasattr(dob_val, "isoformat") else dob_val.isoformat()
+    _write([
+        ("UPDATE consultations SET patient_name = ? WHERE medical_record_no IN "
+         "(SELECT visit_no FROM visits WHERE mrn = ?)", (name, mrn)),
+        (f"UPDATE patients SET name = ?, birth_date = ?, sex = ?, updated_at = {_NOW} WHERE mrn = ?",
+         (name, dob, ss.get(f"id_sex_{mrn}") or "", mrn)),
+    ])
+    audit_log.log("identitas_ubah", mrn, "identitas pasien")
+    active = ss.get("active_patient")
+    if active and patient_mrn_of(active.get("mrn")) == mrn:
+        active["name"] = name
+    _refresh_consultations()
+    _tv._overview.clear()          # daftar hari ini & sidebar memakai cache singkat
+    _tv.today_patients.clear()
+    ss["_id_msg"] = ("ok", "Identitas tersimpan.")
+
+
 def _tab_identity(mrn: str, patient: dict):
     try:
         saved_dob = datetime.strptime(patient.get("birth_date") or "", "%Y-%m-%d").date()
@@ -67,32 +96,18 @@ def _tab_identity(mrn: str, patient: dict):
         saved_dob = None
 
     with st.form(f"form_identity_{mrn}"):
-        name = st.text_input("Nama Pasien", value=patient["name"])
-
-        dob_value = _date_input("Tanggal lahir", saved_dob or date(1980, 1, 1), key=f"dob_{mrn}")
-        dob_unknown = st.checkbox("Tanggal lahir belum diketahui", value=saved_dob is None, key=f"dob_unknown_{mrn}")
-
+        st.text_input("Nama Pasien", value=patient["name"], key=f"id_name_{mrn}")
+        _date_input("Tanggal lahir", saved_dob or date(1980, 1, 1), key=f"dob_{mrn}")
+        st.checkbox("Tanggal lahir belum diketahui", value=saved_dob is None, key=f"dob_unknown_{mrn}")
         sex_value = patient.get("sex") or ""
-        sex = st.selectbox(
-            "Jenis kelamin", SEX_OPTIONS,
+        st.selectbox(
+            "Jenis kelamin", SEX_OPTIONS, key=f"id_sex_{mrn}",
             index=SEX_OPTIONS.index(sex_value) if sex_value in SEX_OPTIONS else 0,
         )
-        submitted = st.form_submit_button("💾 Simpan Identitas")
-    if submitted:
-        if not name.strip():
-            st.error("Nama tidak boleh kosong.")
-            return
-
-        dob = "" if dob_unknown else dob_value.isoformat()
-        update_patient_name(mrn, name.strip())
-        update_patient(mrn, birth_date=dob, sex=sex)
-        audit_log.log("identitas_ubah", mrn, "identitas pasien")
-
-        active = st.session_state.get("active_patient")
-        if active and patient_mrn_of(active.get("mrn")) == mrn:
-            active["name"] = name.strip()
-        _refresh_consultations()
-        st.success("Identitas tersimpan.")
+        st.form_submit_button("💾 Simpan Identitas", on_click=_save_identity, args=(mrn,))
+    kind, text = st.session_state.pop("_id_msg", (None, None))
+    if kind:
+        (st.error if kind == "error" else st.success)(text)
 
 
 def _collect_search_results(query: str, use_ai: bool):
@@ -395,7 +410,6 @@ PATIENT_SORTS = {
     "Nama A–Z": (lambda r: r["name"].lower(), False),
     "Nama Z–A": (lambda r: r["name"].lower(), True),
     "No. RM": (lambda r: r["mrn"], False),
-    "Kunjungan terbanyak": (lambda r: r["visits"], True),
 }
 MAX_CARDS = 50
 
