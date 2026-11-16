@@ -2,6 +2,8 @@
 Tombol Data/Roomchat pada baris pasien membuka kunjungan HARI INI; kunjungan dibuat
 otomatis saat pertama dibuka (satu pasien satu kunjungan per hari). Tanggal lampau
 (pemilih tanggal) bersifat hanya-baca. Seluruh riwayat kunjungan ada di Data Pasien."""
+import json
+from collections import Counter
 from datetime import date, datetime, timedelta
 
 import streamlit as st
@@ -45,6 +47,74 @@ def _init_table() -> bool:
         (),
     )])
     return True
+
+
+STATUS = {
+    "menunggu": ("⚪", "Menunggu"),
+    "diisi": ("🟡", "Sedang diisi"),
+    "persetujuan": ("🟠", "Menunggu persetujuan"),
+    "selesai": ("🟢", "Selesai"),
+}
+
+
+def _loads(text, default):
+    try:
+        return json.loads(text) if text else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _has(value) -> bool:
+    if isinstance(value, dict):
+        return any(_has(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has(v) for v in value)
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _statuses(day: str) -> dict:
+    """mrn -> kunci status, dihitung otomatis dari data kunjungan pada tanggal itu (tanpa tombol).
+    Menunggu: belum ada data. Sedang diisi: ada data klinis/penunjang/chat. Menunggu persetujuan: ada hasil AI
+    (draft di formulir atau kesimpulan roomchat) yang belum disetujui. Selesai: ada hasil AI yang disetujui."""
+    rows = _query("SELECT mrn, visit_no, chief_complaints, anamnesis, physical_exam FROM visits "
+                  "WHERE visit_date = ? ORDER BY created_at DESC", (day,))
+    visits = {}
+    for mrn, vno, cc, an, pe in rows:
+        visits.setdefault(mrn, (vno, cc, an, pe))        # kunjungan terbaru per pasien
+    if not visits:
+        return {}
+    vnos = tuple(v[0] for v in visits.values())
+    marks = ",".join("?" * len(vnos))
+    support = {r[0] for r in _query(
+        f"SELECT DISTINCT mrn FROM patient_supporting WHERE mrn IN ({marks})", vnos)}
+    results = {r[0]: (r[1], r[2]) for r in _query(
+        f"SELECT mrn, MAX(approved), COUNT(*) FROM anamnesis_results WHERE mrn IN ({marks}) GROUP BY mrn", vnos)}
+    chats = {}
+    for vno, raw in _query(
+            f"SELECT medical_record_no, messages FROM consultations WHERE medical_record_no IN ({marks})", vnos):
+        msgs = _loads(raw, [])
+        last = msgs[-1] if msgs else {}
+        chats[vno] = (any(m.get("role") == "user" for m in msgs),
+                      bool(last.get("final")) and last.get("approved") is None)
+    out = {}
+    for mrn, (vno, cc, an, pe) in visits.items():
+        approved, count = results.get(vno, (0, 0))
+        user_chat, chat_draft = chats.get(vno, (False, False))
+        if approved:
+            out[mrn] = "selesai"
+        elif count or chat_draft:
+            out[mrn] = "persetujuan"
+        elif (_has(_loads(cc, [])) or _has(_loads(an, {})) or _has(_loads(pe, {}))
+              or vno in support or user_chat):
+            out[mrn] = "diisi"
+        else:
+            out[mrn] = "menunggu"
+    return out
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -148,37 +218,67 @@ def _page_list(can_edit: bool):
     _rows_list(rows, day, can_edit)
 
 
+# Ganti fungsi _rows_list di components/today_visits.py dengan versi ini.
+# Hasil: pasien aktif (belum selesai) di atas sesuai urutan datang; pasien "selesai"
+# otomatis turun ke bawah setelah divider. Nomor antrean (tiket) tetap, tidak berubah.
+
+def _render_row(no, r, statuses, allergies, day, can_edit, notice, done=False):
+    mrn = r["mrn"]
+    icon, label = STATUS[statuses.get(mrn, "menunggu")]
+    dob = _fmt_date(r.get("birth_date")) if r.get("birth_date") else "—"
+    allergy = allergies.get(mrn, "")
+    with st.container(border=not done):
+        cols = st.columns([2.6, 6, 1.5, 1.7, 0.7] if can_edit else [2.6, 6, 1.5, 1.7])
+        cols[0].markdown(f"**{no}** · {icon} {label}")
+        info = (f"**{r['name']}** · `{mrn}` · {r.get('sex') or '—'} · lahir {dob} · "
+                + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
+        cols[1].markdown(f":gray[{info}]" if done else info)
+        if cols[2].button("📂 Data", key=f"today_data_{mrn}", use_container_width=True):
+            v = _resolve_visit(mrn, day)
+            if v:
+                go_to_patient_data(v["visit_no"])
+                st.rerun()
+            notice.warning("Tidak ada kunjungan pada tanggal ini.")
+        if cols[3].button("💬 Roomchat", key=f"today_chat_{mrn}", use_container_width=True):
+            v = _resolve_visit(mrn, day)
+            if not v:
+                notice.warning("Tidak ada kunjungan pada tanggal ini.")
+            elif v.get("archived"):
+                notice.warning("Roomchat kunjungan ini sudah diarsipkan.")
+            else:
+                open_roomchat_for_mrn(v["visit_no"])
+                st.rerun()
+        if can_edit and cols[4].button("🗑", key=f"today_del_{mrn}",
+                                       help="Keluarkan dari daftar hari ini"):
+            _remove_today(mrn)
+            st.rerun()
+
+
 def _rows_list(rows: list, day: str, can_edit: bool):
-    """Satu kartu satu baris per pasien: info ringkas (alergi terlihat) + tombol Data, Roomchat, hapus."""
+    """Antrean: pasien belum selesai di atas (urut datang), pasien selesai di bawah divider."""
     notice = st.empty()
     allergies = _allergies()
-    for r in rows:
-        mrn = r["mrn"]
-        dob = _fmt_date(r.get("birth_date")) if r.get("birth_date") else "—"
-        allergy = allergies.get(mrn, "")
-        with st.container(border=True):
-            cols = st.columns([7, 1.5, 1.7, 0.7] if can_edit else [7, 1.5, 1.7])
-            cols[0].markdown(f"**{r['name']}** · `{mrn}` · {r.get('sex') or '—'} · lahir {dob} · "
-                             + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
-            if cols[1].button("📂 Data", key=f"today_data_{mrn}", use_container_width=True):
-                v = _resolve_visit(mrn, day)
-                if v:
-                    go_to_patient_data(v["visit_no"])
-                    st.rerun()
-                notice.warning("Tidak ada kunjungan pada tanggal ini.")
-            if cols[2].button("💬 Roomchat", key=f"today_chat_{mrn}", use_container_width=True):
-                v = _resolve_visit(mrn, day)
-                if not v:
-                    notice.warning("Tidak ada kunjungan pada tanggal ini.")
-                elif v.get("archived"):
-                    notice.warning("Roomchat kunjungan ini sudah diarsipkan.")
-                else:
-                    open_roomchat_for_mrn(v["visit_no"])
-                    st.rerun()
-            if can_edit and cols[3].button("🗑", key=f"today_del_{mrn}",
-                                           help="Keluarkan dari daftar hari ini"):
-                _remove_today(mrn)
-                st.rerun()
+    statuses = _statuses(day)
+    count = Counter(statuses.get(r["mrn"], "menunggu") for r in rows)
+    st.caption(" · ".join(f"{STATUS[k][0]} {STATUS[k][1]}: {count[k]}" for k in STATUS if count[k]))
+
+    numbered = list(enumerate(rows, start=1))          # nomor tiket tetap
+    is_done = lambda r: statuses.get(r["mrn"]) == "selesai"
+    active = [(n, r) for n, r in numbered if not is_done(r)]
+    done = [(n, r) for n, r in numbered if is_done(r)]
+
+    for n, r in active:
+        _render_row(n, r, statuses, allergies, day, can_edit, notice)
+    if active == [] and done:
+        st.success("Semua pasien hari ini sudah selesai diperiksa.")
+    if done:
+        st.divider()
+        st.markdown(f"##### ✅ Sudah selesai diperiksa ({len(done)})")
+        for n, r in done:
+            _render_row(n, r, statuses, allergies, day, can_edit, notice, done=True)
+
+# OPSIONAL (agar urutan berpindah sendiri tanpa klik, status di-cache 10 dtk):
+# _rows_list = audit_log.live(_rows_list, every=10)
 
 
 def render_today_page():
