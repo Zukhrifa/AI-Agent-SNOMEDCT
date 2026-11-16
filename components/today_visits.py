@@ -1,4 +1,4 @@
-"""Kunjungan: admin menandai pasien yang berkunjung hari ini, semua peran melihat daftarnya.
+"""Kunjungan: admin menandai pasien yang berkunjung hari ini, semua peran melihat daftarnya (satu baris per pasien).
 Tombol Data/Roomchat pada baris pasien membuka kunjungan HARI INI; kunjungan dibuat
 otomatis saat pertama dibuka (satu pasien satu kunjungan per hari). Tanggal lampau
 (pemilih tanggal) bersifat hanya-baca. Seluruh riwayat kunjungan ada di Data Pasien."""
@@ -11,13 +11,11 @@ from auth.session import current_user
 from components.nav import go_to_patient_data, open_roomchat_for_mrn
 from database import (_NOW, _query, _write, create_visit, list_patient_overview,
                       list_visits)
-from modules.patient_profile import allergy_map, get_profile
+from modules.patient_profile import allergy_map
 
 TODAY_VIEW_ROLES = ("admin", "dokter", "perawat")   # peran yang melihat menu Kunjungan
 TODAY_EDIT_ROLES = ("admin",)                       # peran yang boleh mengatur daftar hari ini
 SIDEBAR_MAX = 8                                     # tidak dipakai lagi; dibiarkan agar impor lama aman
-
-_fragment = getattr(st, "fragment", None) or (lambda fn: fn)
 
 
 def today_str() -> str:
@@ -150,34 +148,18 @@ def _page_list(can_edit: bool):
     _rows_list(rows, day, can_edit)
 
 
-def _rerun_local():
-    """Muat ulang hanya daftar kartu (Streamlit baru); jika tidak didukung, seluruh halaman."""
-    try:
-        st.rerun(scope="fragment")
-    except Exception:
-        st.rerun()
-
-
-@_fragment
 def _rows_list(rows: list, day: str, can_edit: bool):
-    """Kartu pasien berdropdown (sama seperti Data Pasien): klik header untuk membuka riwayat tetap dan
-    riwayat kunjungan; hanya satu kartu terbuka sekaligus."""
-    import components.patient_data as pd        # impor saat dipakai: patient_data juga mengimpor modul ini
-    st.markdown(pd._CARD_CSS, unsafe_allow_html=True)
+    """Satu kartu satu baris per pasien: info ringkas (alergi terlihat) + tombol Data, Roomchat, hapus."""
     notice = st.empty()
     allergies = _allergies()
     for r in rows:
         mrn = r["mrn"]
-        is_open = st.session_state.get("tv_open_mrn") == mrn
         dob = _fmt_date(r.get("birth_date")) if r.get("birth_date") else "—"
         allergy = allergies.get(mrn, "")
-        with st.container(border=True, key=f"pcard_{mrn}"):
+        with st.container(border=True):
             cols = st.columns([7, 1.5, 1.7, 0.7] if can_edit else [7, 1.5, 1.7])
-            label = (f"{'▾' if is_open else '▸'}  **{r['name']}** · `{mrn}` · {r.get('sex') or '—'} · "
-                     f"lahir {dob} · " + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
-            if cols[0].button(label, key=f"pc_toggle_{mrn}", use_container_width=True):
-                st.session_state["tv_open_mrn"] = None if is_open else mrn
-                _rerun_local()
+            cols[0].markdown(f"**{r['name']}** · `{mrn}` · {r.get('sex') or '—'} · lahir {dob} · "
+                             + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
             if cols[1].button("📂 Data", key=f"today_data_{mrn}", use_container_width=True):
                 v = _resolve_visit(mrn, day)
                 if v:
@@ -197,17 +179,6 @@ def _rows_list(rows: list, day: str, can_edit: bool):
                                            help="Keluarkan dari daftar hari ini"):
                 _remove_today(mrn)
                 st.rerun()
-
-            if is_open:                          # data baru dimuat saat kartu dibuka
-                with st.container(key=f"{'pdetail' if pd._OVERLAY else 'pinline'}_{mrn}"):
-                    st.markdown("**Riwayat tetap**")
-                    pd._profile_view(get_profile(mrn))
-                    st.markdown("**Riwayat kunjungan**")
-                    visits = list_visits(mrn)
-                    if not visits:
-                        st.caption("Belum ada kunjungan.")
-                    for v in visits:
-                        pd._render_result_row(f"tvv_{mrn}", v, pd._snippet(v["summary"]))
 
 
 def render_today_page():

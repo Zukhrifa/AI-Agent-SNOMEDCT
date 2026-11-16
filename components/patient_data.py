@@ -439,6 +439,10 @@ _CARD_CSS = """<style>
 }
 </style>"""
 
+@st.cache_data(ttl=10, show_spinner=False)
+def _dd_data(mrn: str):
+    """Isi dropdown kartu (riwayat tetap + kunjungan), dicache singkat agar buka-tutup terasa cepat."""
+    return get_profile(mrn), list_visits(mrn)
 
 def _patient_card(r: dict, allergy: str):
     """Kartu pasien: klik header untuk membuka detail (hanya satu kartu terbuka sekaligus);
@@ -460,16 +464,16 @@ def _patient_card(r: dict, allergy: str):
             st.rerun()
 
         if is_open:                          # data baru dimuat saat kartu dibuka
-            with st.container(key=f"{'pdetail' if _OVERLAY else 'pinline'}_{mrn}"):
-                st.markdown("**Riwayat tetap**")
-                _profile_view(get_profile(mrn))
-                st.markdown("**Riwayat kunjungan**")
-                visits = list_visits(mrn)
-                if not visits:
-                    st.caption("Belum ada kunjungan.")
-                for v in visits:
-                    _render_result_row(f"pcv_{mrn}", v, _snippet(v["summary"]))
-
+            prof, visits = _dd_data(mrn)
+            st.markdown("**Riwayat tetap**")
+            _profile_view(prof)
+            st.markdown("**Riwayat kunjungan**")
+            if not visits:
+                st.caption("Belum ada kunjungan.")
+            for v in visits[:5]:
+                _render_result_row(f"pcv_{mrn}", v, _snippet(v["summary"]))
+            if len(visits) > 5:
+                st.caption(f"{len(visits) - 5} kunjungan lebih lama ada di halaman pasien (tombol Buka).")
 @_fragment
 def _cards_list(rows: list, allergies: dict):
     """Daftar kartu sebagai fragment: klik kartu tidak memuat ulang seluruh halaman."""
