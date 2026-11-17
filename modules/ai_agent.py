@@ -115,6 +115,11 @@ TEMUAN UNTUK KODE SNOMED CT:
 - Anda TIDAK menulis kode angka. Sebutkan konsep klinisnya di "findings"; sistem akan mencari kode SNOMED CT terdekat dari database.
 - Setiap temuan: "label" (istilah Indonesia), "term_en" (istilah medis Inggris baku, sependek mungkin, mis. "chest pain", "hypertension", "angina pectoris"), "kategori": "gejala" atau "faktor_risiko" atau "diagnosis".
 - Status "ask" dan "insufficient": findings harus [].
+- ATURAN KEPASTIAN (wajib):
+  * Diagnosis yang hanya didukung gejala + faktor risiko, tanpa troponin meningkat, EKG akut, angiografi/ca >= 1, atau ekokardiografi yang BENAR-BENAR ada di DATA PASIEN, WAJIB ditulis sebagai "dugaan"/"kemungkinan", bukan pasti.
+  * Satu kali tekanan darah tinggi BUKAN diagnosis hipertensi: tulis "tekanan darah meningkat, perlu verifikasi" (term_en: "elevated blood pressure"), kecuali hipertensi tercatat di riwayat/obat rutin.
+  * Jangan menyimpulkan temuan yang tidak ada di data (mis. disfungsi ventrikel/gagal jantung tanpa data ekokardiografi atau fraksi ejeksi; infark tanpa troponin/EKG). Hasil normal/negatif (mis. ca 0, troponin normal) harus ikut dipertimbangkan, jangan diabaikan.
+  * Teks kesimpulan dan "findings" harus SAMA PERSIS: setiap diagnosis di "Dugaan diagnosis" ada di findings (kategori diagnosis), dan setiap findings kategori diagnosis disebut di teks. Jangan ada diagnosis tanpa temuan, dan jangan ada temuan tanpa diagnosis di teks.
 - Status "final" (hanya bila data bermakna): WAJIB isi findings: minimal 1 gejala dan 1-3 dugaan diagnosis, ditambah faktor risiko bila ada. Walau belum pasti, tetap tulis dugaan yang paling mendekati (di teks tandai sebagai dugaan). Jangan mengosongkan findings pada status final.
 
 Istilah SNOMED CT dari database yang terkait percakapan (hanya referensi penulisan term_en; pakai bila relevan):
@@ -129,7 +134,7 @@ Baris pemisah harus persis "{{DELIM}}" (tiga tanda sama dengan di kiri DAN kanan
 TOOLS_BLOCK_TEMPLATE = """
 TOOL (opsional, hanya bila perlu):
 {{TOOLS}}
-Aturan tool: tanda bahaya, checklist, dan data pasien SUDAH tersedia di atas, jadi jangan memanggil tool untuk hal itu. Panggil tool HANYA untuk: menghitung skor risiko (calculate_heart_score) bila datanya cukup, mencari kode untuk istilah spesifik, melihat detail data lengkap, atau mencari isi SOP/pedoman (search_guidelines). Jika dokter bertanya tentang SOP, prosedur, pemeriksaan, atau tatalaksana dan tool search_guidelines tersedia, panggil tool itu lebih dulu dan jawab HANYA berdasarkan kutipan yang dikembalikan. Bila kutipan relevan, tulis rekomendasinya beserta sumbernya di teks, mis. \"Berdasarkan <nama dokumen>, hal. X, dokter perlu ...\" atau (Sumber: nama dokumen, hal. X); nomor halaman WAJIB disertakan. Jika dokter bertanya soal SOP/pedoman tetapi tidak ada kutipan yang relevan, katakan terus terang bahwa tidak ditemukan di dokumen pedoman, dan jangan mengarang isi dokumen. Maksimal {{MAX_CALLS}} tool per langkah. Untuk memanggil tool, keluarkan HANYA (tanpa teks sebelum pemisah):
+Aturan tool: tanda bahaya, checklist, dan data pasien SUDAH tersedia di atas, jadi jangan memanggil tool untuk hal itu. Panggil tool HANYA untuk: menghitung skor risiko (calculate_heart_score) bila datanya cukup, mencari kode untuk istilah spesifik, melihat detail data lengkap, atau mencari isi SOP/pedoman (search_guidelines). Jika dokter bertanya tentang SOP, prosedur, pemeriksaan, atau tatalaksana dan tool search_guidelines tersedia, panggil tool itu lebih dulu dan jawab HANYA berdasarkan kutipan yang dikembalikan. Bila kutipan relevan, tulis rekomendasinya beserta sumbernya di teks, mis. \"Berdasarkan <nama dokumen>, hal. X, dokter perlu ...\" atau (Sumber: nama dokumen, hal. X); nomor halaman WAJIB disertakan. Kutip pedoman HANYA jika isi kutipan langsung mendukung klaim yang Anda tulis; jika hanya mirip topiknya, jangan dikutip. Jika dokter bertanya soal SOP/pedoman tetapi tidak ada kutipan yang relevan, katakan terus terang bahwa tidak ditemukan di dokumen pedoman, dan jangan mengarang isi dokumen. Maksimal {{MAX_CALLS}} tool per langkah. Untuk memanggil tool, keluarkan HANYA (tanpa teks sebelum pemisah):
 {{DELIM}}
 {"status": "tool", "calls": [{"tool": "nama_tool", "args": {}}]}
 Sebagian besar giliran TIDAK memerlukan tool: langsung jawab (status ask, final, atau insufficient).
@@ -319,12 +324,37 @@ def _clean_query(text: str) -> str:
     return " ".join(re.sub(r"(Pertanyaan dokter|Jawaban pasien):", " ", text).split())
 
 
-def get_candidates(user_input: str, chat_history: list) -> dict:
-    """Return {conceptId: term}. Hasil pencarian di-cache, jadi aman dipanggil ulang."""
+RECORD_QUERY_LINES = 6        # baris Data Pasien yang dipakai mencari istilah saat meminta kesimpulan
+_SKIP_RECORD = ("Identitas", "Alergi", "Kesimpulan anamnesis", "Data penunjang:")
+
+
+def _facts_part(patient_context: str) -> str:
+    """Bagian konteks yang berisi fakta kunjungan INI (tanpa riwayat kunjungan lain)."""
+    return (patient_context or "").split("RIWAYAT KUNJUNGAN SEBELUMNYA", 1)[0]
+
+
+def _record_queries(patient_context: str) -> list:
+    out = []
+    for line in _facts_part(patient_context).splitlines():
+        s = re.sub(r"^\s*-?\s*(\[[^\]]*\]\s*)?", "", line).strip()
+        if len(s) < 12 or s.startswith(_SKIP_RECORD):
+            continue
+        out.append(s[:200])
+        if len(out) >= RECORD_QUERY_LINES:
+            break
+    return out
+
+
+def get_candidates(user_input: str, chat_history: list, patient_context: str = "") -> dict:
+    """Return {conceptId: term}. Hasil pencarian di-cache, jadi aman dipanggil ulang.
+    Saat meminta kesimpulan (pesan kontrol), Data Pasien ikut dipakai: bukan hanya 3 pesan terakhir."""
     texts = [m["content"] for m in chat_history if m["role"] == "user"] + [user_input]
-    texts = [t for t in texts if not t.startswith(CONTROL_PREFIX)]
+    chat_texts = [t for t in texts if not t.startswith(CONTROL_PREFIX)]
+    queries = list(reversed(chat_texts[-RETRIEVAL_MESSAGES:]))
+    if user_input.startswith(CONTROL_PREFIX):
+        queries = _record_queries(patient_context) + queries
     candidates = {}
-    for text in reversed(texts[-RETRIEVAL_MESSAGES:]):
+    for text in queries:
         query = _clean_query(text)
         if not query:
             continue
@@ -478,6 +508,50 @@ def match_label(query: str, term: str) -> str:
     return "lemah"
 
 
+# Kepastian klinis (dihitung kode dari bukti di data), TERPISAH dari kecocokan istilah SNOMED (match):
+#   tercatat        : gejala/faktor risiko yang ada di data
+#   dugaan          : diagnosis tanpa bukti penentu
+#   didukung data   : diagnosis dengan bukti penentu di data (tetap perlu persetujuan dokter)
+#   perlu verifikasi: klaim yang butuh data/pengukuran ulang
+_I = re.I
+_CERT_RULES = [
+    # (diagnosis, pola istilah, pola bukti di data, status tanpa bukti, berlaku utk semua kategori)
+    ("infark/SKA", re.compile(r"infarct|infark|myocardial|acute coronary|\bacs\b|stemi|unstable angina|angina tidak stabil", _I),
+     re.compile(r"troponin\D{0,25}(meningkat|naik|positif|tinggi|elevated|positive)|(?<!tanpa )(?<!tidak ada )(?<!tidak )(st[\s-]*(elevasi|elevation)|\bn?stemi\b)", _I),
+     "dugaan", False),
+    ("penyakit jantung koroner", re.compile(r"coronary (artery )?disease|penyakit jantung koroner|\bpjk\b|\bcad\b|atheroscl|aterosklerosis|angina pect", _I),
+     re.compile(r"(angiograf|\bcag\b|kateterisasi)\D{0,60}(stenosis|oklusi|lesi|\d{2,3}\s*%)|\bca\b\s*[:=]?\s*[1-9]|(calcium score|skor kalsium)\D{0,10}[1-9]", _I),
+     "dugaan", False),
+    ("hipertensi", re.compile(r"hypertension|hipertensi", _I),
+     re.compile(r"riwayat[^.\n]{0,60}hipertensi|hipertensi\s+(sejak|\d)|antihipertensi|amlodipin|captopril|ramipril|valsartan|candesartan|losartan|telmisartan|lisinopril|irbesartan", _I),
+     "perlu verifikasi", True),
+    ("hipertrofi ventrikel", re.compile(r"hypertroph|hipertrofi|\blvh\b", _I),
+     re.compile(r"(?<!tanpa )(?<!tidak ada )(\blvh\b|hipertrofi|hypertroph)(?!\s*(tidak|negatif|\(-\)))", _I),
+     "perlu verifikasi", True),
+    ("fungsi ventrikel/gagal jantung", re.compile(r"ventric|heart failure|gagal jantung|cardiomyopath|kardiomiopati|ejection|cardiomegal|kardiomegali", _I),
+     re.compile(r"ekokardio|echocardio|\becho\b|\bef\b|lvef|fraksi ejeksi|ejection fraction|\bctr\b|cardiothoracic", _I),
+     "perlu verifikasi", True),
+]
+_FAMILY = re.compile(r"family history|riwayat keluarga", _I)
+
+
+def build_evidence(patient_context: str = "", chat_history=None) -> str:
+    """Teks bukti untuk menilai kepastian: Data Pasien kunjungan ini + ucapan pasien.
+    Kesimpulan AI sebelumnya dan kunjungan lain TIDAK dipakai (agar tidak membuktikan dirinya sendiri)."""
+    facts = [l for l in _facts_part(patient_context).splitlines()
+             if not l.startswith("Kesimpulan anamnesis")]
+    return "\n".join(facts + conversation_texts(list(chat_history or [])))
+
+
+def assess_certainty(kategori: str, text: str, evidence: str) -> str:
+    if _FAMILY.search(text or ""):
+        return "tercatat"
+    for _name, dx, proof, fallback, any_cat in _CERT_RULES:
+        if (kategori == "diagnosis" or any_cat) and dx.search(text or ""):
+            return "didukung data" if proof.search(evidence or "") else fallback
+    return "dugaan" if kategori == "diagnosis" else "tercatat"
+
+
 def find_best_concept(term_en: str, label: str):
     """Cari konsep SNOMED terdekat untuk satu temuan. Return (konsep, label_kecocokan) atau None."""
     pool, seen = [], set()
@@ -504,7 +578,8 @@ def find_best_concept(term_en: str, label: str):
     return best, match_label(ref, best["term"])
 
 
-def map_findings_to_codes(findings) -> list:
+def map_findings_to_codes(findings, evidence: str = "", unmapped: list = None) -> list:
+    """unmapped (opsional): diisi label temuan yang tidak mendapat kode, agar tidak hilang diam-diam."""
     codes, seen = [], set()
     if not isinstance(findings, list):
         return codes
@@ -517,9 +592,13 @@ def map_findings_to_codes(findings) -> list:
             continue
         found = find_best_concept(term_en, label)
         if not found:
+            if unmapped is not None:
+                unmapped.append(label or term_en)
             continue
         hit, match = found
         if hit["conceptId"] in seen:
+            if unmapped is not None and (label or term_en) not in unmapped:
+                unmapped.append((label or term_en) + " (kode sama dengan temuan lain)")
             continue
         seen.add(hit["conceptId"])
         kategori = str(item.get("kategori", "")).strip().lower()
@@ -531,6 +610,7 @@ def map_findings_to_codes(findings) -> list:
             "kategori": kategori,
             "label": label or term_en,
             "match": match,
+            "certainty": assess_certainty(kategori, f"{term_en} {label} {hit['term']}", evidence),
         })
     return codes
 
@@ -550,6 +630,7 @@ def fallback_codes(text: str, candidates: dict) -> list:
             "kategori": "lainnya",
             "label": h["term"],
             "match": "terdekat",
+            "certainty": "dugaan",
         }
         for h in hits
     ]
@@ -580,7 +661,7 @@ def _as_final(result: dict, codes: list, candidates: dict) -> dict:
     return result
 
 
-def parse_response(raw: str, candidates: dict = None, force_final: bool = False) -> dict:
+def parse_response(raw: str, candidates: dict = None, force_final: bool = False, evidence: str = "") -> dict:
     """Return dict: text, status ('ask'/'final'), quick_actions, codes, covered, dropped."""
     candidates = candidates or {}
     head, tail, found = split_data_block(raw)
@@ -611,7 +692,12 @@ def parse_response(raw: str, candidates: dict = None, force_final: bool = False)
         return result
 
     if status == "final":
-        return _as_final(result, map_findings_to_codes(data.get("findings")), candidates)
+        unmapped = []
+        codes = map_findings_to_codes(data.get("findings"), evidence, unmapped)
+        final = _as_final(result, codes, candidates)
+        if unmapped:
+            final["text"] += "\n\n(Tanpa padanan kode SNOMED CT di database: " + "; ".join(unmapped) + ")"
+        return final
 
     if status == "tool":
         # Batas langkah tercapai (atau mode tanpa tool) tetapi AI masih meminta tool
@@ -675,7 +761,7 @@ def run_agent(user_input: str, chat_history: list, patient_context: str = "",
     max_steps = AGENT_MAX_STEPS if use_tools else 0
 
     # Persiapan lokal (milidetik, tanpa LLM)
-    candidates = get_candidates(user_input, chat_history)
+    candidates = get_candidates(user_input, chat_history, patient_context)
     patient = get_patient(mrn) if mrn else None
     supporting = list_supporting(mrn) if mrn else []
     texts = conversation_texts(list(chat_history) + [{"role": "user", "content": user_input}])

@@ -231,7 +231,8 @@ def _tab_results(mrn: str, patient: dict):
                 for c in r["codes"]:
                     kategori = CATEGORY_NAMES.get(c.get("kategori", ""), "")
                     match = c.get("match", "")
-                    note = f" — _{match}_" if match else ""
+                    certainty = c.get("certainty", "")
+                    note = (f" — _{certainty}_" if certainty else "") + (f" · istilah {match}" if match else "")
                     st.markdown(f"- {kategori}: **{c['term']}** `{c['conceptId']}`{note}")
 
 

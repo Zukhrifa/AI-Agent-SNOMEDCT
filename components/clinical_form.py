@@ -12,8 +12,8 @@ from auth import audit_log
 from database import (add_supporting, approve_anamnesis, delete_supporting, get_patient,
                       list_anamnesis_results, list_supporting, save_anamnesis_result,
                       update_patient)
-from modules.ai_agent import (FINAL_REQUEST_TEXT, friendly_error, get_candidates, input_problem,
-                              parse_response, run_agent)
+from modules.ai_agent import (FINAL_REQUEST_TEXT, REGENERATE_REQUEST_TEXT, build_evidence, friendly_error, get_candidates,
+                              input_problem, parse_response, run_agent)
 from modules.patient_context import build_patient_context
 
 
@@ -49,14 +49,20 @@ def _fill_complaints(vno: str, codes: list) -> int:
     return added
 
 
-def _analyze(vno: str) -> tuple:
-    """Jalankan agent sekali untuk kesimpulan kunjungan. Return (level, pesan)."""
+def _analyze(vno: str, previous: dict = None) -> tuple:
+    """Jalankan agent sekali untuk kesimpulan kunjungan. Return (level, pesan).
+    previous: hasil AI yang dinilai dokter TIDAK akurat -> AI membuat kesimpulan baru yang berbeda."""
     use_tools = bool(st.session_state.get("agent_pref", True))
+    request = REGENERATE_REQUEST_TEXT if previous else FINAL_REQUEST_TEXT
+    history = [] if not previous else [
+        {"role": "user", "content": FINAL_REQUEST_TEXT},
+        {"role": "assistant", "content": previous["summary"], "final": True, "codes": previous["codes"]},
+    ]
     raw, last_text = "", ""
     try:
         with st.spinner("AI menganalisis data kunjungan..."):
             context = build_patient_context(vno)
-            for event in run_agent(FINAL_REQUEST_TEXT, [], context, mrn=vno, use_tools=use_tools):
+            for event in run_agent(request, history, context, mrn=vno, use_tools=use_tools):
                 if event["type"] == "text" and event["text"].strip():
                     last_text = event["text"].strip()
                 elif event["type"] == "final":
@@ -66,7 +72,8 @@ def _analyze(vno: str) -> tuple:
     raw = raw or last_text
     if not raw.strip():
         return "error", "Data tersimpan, tetapi respons AI kosong. Coba lagi."
-    result = parse_response(raw, get_candidates(FINAL_REQUEST_TEXT, []), force_final=True)
+    result = parse_response(raw, get_candidates(request, history, context), force_final=True,
+                            evidence=build_evidence(context, history))
     text, codes = (result.get("text") or "").strip(), result.get("codes") or []
     if result.get("status") != "final":      # AI menilai data tidak memadai: jangan simpan sebagai hasil
         return "warning", (text or "Data belum memadai untuk kesimpulan.") + " (Data tersimpan; hasil AI tidak dibuat.)"
@@ -74,7 +81,9 @@ def _analyze(vno: str) -> tuple:
         return "error", "Data tersimpan, tetapi respons AI kosong. Coba lagi."
     save_anamnesis_result(vno, text, codes, approved=False)
     added = _fill_complaints(vno, codes)
-    audit_log.log("ai_jawab", vno, "analisis dari data klinis")
+    audit_log.log("ai_jawab", vno, "kesimpulan dibuat ulang" if previous else "analisis dari data klinis")
+    if previous:
+        return "success", "Kesimpulan baru dibuat. Hasil AI menunggu persetujuan dokter."
     return "success", (f"Data tersimpan dan dianalisis. {added} keluhan utama ditambahkan; "
                        "hasil AI menunggu persetujuan dokter.")
 
@@ -89,11 +98,17 @@ def _approval_block(vno: str) -> None:
         st.write(latest["summary"])
         for c in latest["codes"]:
             st.markdown(f"- **{c.get('term', '')}** `{c.get('conceptId', '')}`"
-                        + (f" — _{c['match']}_" if c.get("match") else ""))
-        if st.button("✅ Setujui & simpan temuan SNOMED CT", key=f"cf_approve_{vno}",
-                     type="primary", use_container_width=True):
+                        + (f" — _{c['certainty']}_" if c.get("certainty") else "")
+                        + (f" · istilah {c['match']}" if c.get("match") else ""))
+        c_yes, c_no = st.columns(2)
+        if c_yes.button("✅ Akurat: setujui & simpan", key=f"cf_approve_{vno}",
+                        type="primary", use_container_width=True):
             info = approve_anamnesis(vno, latest["summary"], latest["codes"])
             audit_log.log("ai_setuju", vno, f"{info.get('saved', 0)} temuan SNOMED tersimpan")
+            st.rerun()
+        if c_no.button("❌ Tidak akurat: buat ulang", key=f"cf_reject_{vno}", use_container_width=True):
+            audit_log.log("ai_tolak", vno)
+            st.session_state[f"cf_flash_{vno}"] = _analyze(vno, previous=latest)
             st.rerun()
 
 

@@ -24,6 +24,7 @@ from modules.agent_tools import (
 )
 from modules.ai_agent import (
     CONTROL_PREFIX,
+    build_evidence,
     DEFAULT_QUICK_ACTIONS,
     FINAL_REQUEST_TEXT,
     REGENERATE_REQUEST_TEXT,
@@ -43,11 +44,19 @@ CATEGORY_LABELS = [
     ("lainnya", "Lainnya"),
 ]
 
+# Kecocokan ISTILAH SNOMED (bukan kepastian diagnosis)
 MATCH_STYLES = {
-    "tepat": ("#dcfce7", "#166534", "tepat"),
-    "mirip": ("#fef9c3", "#854d0e", "mirip"),
-    "terdekat": ("#ffedd5", "#9a3412", "terdekat - verifikasi"),
+    "tepat": ("#f1f5f9", "#334155", "istilah sama"),
+    "mirip": ("#f1f5f9", "#334155", "istilah mirip"),
+    "terdekat": ("#ffedd5", "#9a3412", "istilah terdekat - verifikasi"),
     "lemah": ("#fee2e2", "#991b1b", "tidak sesuai - tidak disimpan"),
+}
+# Kepastian KLINIS (dihitung dari bukti di data)
+CERTAINTY_STYLES = {
+    "tercatat": ("#e0f2fe", "#075985", "tercatat di data"),
+    "didukung data": ("#dcfce7", "#166534", "didukung data"),
+    "dugaan": ("#fef9c3", "#854d0e", "dugaan"),
+    "perlu verifikasi": ("#fee2e2", "#991b1b", "perlu verifikasi"),
 }
 
 
@@ -156,6 +165,16 @@ def _match_badge(match: str) -> str:
     )
 
 
+def _certainty_badge(certainty: str) -> str:
+    if certainty not in CERTAINTY_STYLES:
+        return ""
+    bg, fg, text = CERTAINTY_STYLES[certainty]
+    return (
+        f"<span style='background:{bg};color:{fg};padding:1px 6px;border-radius:6px;"
+        f"font-size:11px;margin-left:4px;font-weight:600;'>{text}</span>"
+    )
+
+
 def _codes_html(codes) -> str:
     if not codes:
         return (
@@ -164,7 +183,9 @@ def _codes_html(codes) -> str:
         )
     parts = [
         "<div style='margin-top:12px;padding-top:10px;border-top:1px dashed #e2e8f0;'>"
-        "<div style='font-weight:600;color:#0f172a;margin-bottom:4px;'>Kode SNOMED CT</div>"
+        "<div style='font-weight:600;color:#0f172a;margin-bottom:2px;'>Kode SNOMED CT</div>"
+        "<div style='font-size:11px;color:#64748b;margin-bottom:4px;'>Label pertama = kepastian klinis; "
+        "label kedua = kecocokan istilah SNOMED. Semua tetap menunggu persetujuan dokter.</div>"
     ]
     for key, label in CATEGORY_LABELS:
         items = [c for c in codes if c.get("kategori") == key]
@@ -181,7 +202,8 @@ def _codes_html(codes) -> str:
             parts.append(
                 f"<div style='margin-left:8px;'>• {arrow}{html.escape(c['term'])} "
                 "<span style='background:#eff6ff;color:#2563eb;padding:1px 6px;border-radius:6px;font-size:12px;'>"
-                f"{html.escape(c['conceptId'])}</span>{_match_badge(c.get('match', ''))}</div>"
+                f"{html.escape(c['conceptId'])}</span>{_certainty_badge(c.get('certainty', ''))}"
+                f"{_match_badge(c.get('match', ''))}</div>"
             )
     parts.append("</div>")
     return "".join(parts)
@@ -466,8 +488,9 @@ def _process_pending(slot):
     if raw.strip():
         result = parse_response(
             raw,
-            get_candidates(pending, history),
+            get_candidates(pending, history, patient_context),
             force_final=pending.startswith(CONTROL_PREFIX),
+            evidence=build_evidence(patient_context, list(history) + [{"role": "user", "content": pending}]),
         )
         text = result["text"] or "Maaf, respons AI kosong. Silakan kirim ulang pesan Anda."
 

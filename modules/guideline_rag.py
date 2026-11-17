@@ -262,7 +262,9 @@ def search(query: str, k: int = 4) -> list:
     if not terms or not n_docs:
         return []
     scored = []
-    need = max(1, math.ceil(len(terms) * 0.5))  # minimal separuh kata kunci harus ada di kutipan
+    # minimal 60% kata kunci harus ada di kutipan, dan >= 2 kata bila kuerinya >= 3 kata
+    # (kecocokan satu kata saja hanya mirip topik, bukan mendukung klaim)
+    need = max(2 if len(terms) >= 3 else 1, math.ceil(len(terms) * 0.6))
     for i, (tf, dl) in enumerate(zip(idx["tf"], idx["len"])):
         score, hit = 0.0, 0
         for t in terms:
