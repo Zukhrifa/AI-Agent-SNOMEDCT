@@ -43,7 +43,7 @@ def render_force_password_change(user: dict) -> None:
 def _llm_section() -> None:
     """AI bawaan sistem untuk semua pengguna; API key pribadi (Gemini/OpenAI/Claude) hanya berlaku
     untuk akun ini dan hanya di memori sesi (tidak ditulis ke database)."""
-    st.subheader("🔑 Penyedia AI & API Key")
+    st.subheader("Penyedia AI & API Key")
     cfg = get_user_llm()
     if cfg:
         st.success(f"Memakai {PROVIDERS[cfg['provider']]['label']} · {cfg['model']} dengan API key pribadi "

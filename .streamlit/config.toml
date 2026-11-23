@@ -1,0 +1,19 @@
+# Tema dasar. Perlu restart `streamlit run` setelah diubah.
+[theme]
+base = "light"
+primaryColor = "#2F5F98"              # biru tenang (bukan biru default / ungu)
+backgroundColor = "#FAF9F6"           # putih tulang hangat
+secondaryBackgroundColor = "#F3F1EC"  # sidebar & panel
+textColor = "#1F2328"
+font = "sans serif"
+
+# Opsional (hanya Streamlit versi baru). Jika muncul peringatan "Unrecognized config option",
+# hapus baris yang bermasalah.
+# baseRadius = "8px"
+# borderColor = "#E4E0D6"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

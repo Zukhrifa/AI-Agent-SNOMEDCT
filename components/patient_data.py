@@ -672,7 +672,7 @@ def _page_visit(mrn: str, vno: str):
 
 
 def render_patient_data_page():
-    st.title("🗂 Data Pasien")
+    st.title("Data Pasien")
     mrn, vno = st.session_state.get("data_mrn"), st.session_state.get("data_visit")
     if mrn and vno:
         _page_visit(mrn, vno)

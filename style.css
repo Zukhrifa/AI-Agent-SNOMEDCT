@@ -1,87 +1,169 @@
-/* --- Styling Global & Responsive --- */
-body, .stApp {
-    background-color: #f8fafc;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+/* Tema rapi, datar, dan tenang. Tanpa gradasi, glow, atau bayangan tebal. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:wght@500;600&display=swap');
+
+:root {
+  --bg: #FAF9F6;
+  --surface: #FFFFFF;
+  --sidebar: #F3F1EC;
+  --line: #E4E0D6;
+  --line-strong: #D3CEC2;
+  --text: #1F2328;
+  --muted: #6B6F76;
+  --accent: #2F5F98;
+  --accent-hover: #264E7E;
+  --accent-soft: #E8EFF7;
+  --danger: #B3261E;
+  --radius: 8px;
 }
 
-/* Styling Tombol Standar */
-.stButton > button {
-    border-radius: 10px;
-    border: 1px solid #e2e8f0;
-    background-color: #ffffff;
-    color: #1e293b;
-    font-weight: 500;
-    text-align: left;
-    padding: 10px 14px;
-    transition: all 0.2s ease;
+/* ---------- Dasar ---------- */
+html, body, .stApp, [data-testid="stAppViewContainer"] {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
-.stButton > button:hover {
-    border-color: #2563eb;
-    background-color: #eff6ff;
-    color: #2563eb;
+.block-container { padding-top: 3.5rem; max-width: 1180px; }
+h1, h2 {
+  font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  font-weight: 600; letter-spacing: -0.01em; color: var(--text);
+}
+h1 { font-size: 2rem; padding-top: 0; }
+h2 { font-size: 1.5rem; }
+h3, h4, h5 { font-weight: 600; letter-spacing: 0; color: var(--text); }
+h4 { font-size: 1.05rem; }
+[data-testid="stCaptionContainer"], .stCaption, small { color: var(--muted); }
+hr { border: none; border-top: 1px solid var(--line); margin: 1.25rem 0; }
+a { color: var(--accent); }
+
+/* Hilangkan ikon tautan di judul dan tombol Deploy */
+[data-testid="stHeaderActionElements"] { display: none; }
+[data-testid="stAppDeployButton"], .stDeployButton { display: none; }
+header[data-testid="stHeader"] { background: transparent; }
+footer { visibility: hidden; }
+
+/* Scrollbar tipis */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+
+/* ---------- Sidebar ---------- */
+section[data-testid="stSidebar"] {
+  background: var(--sidebar);
+  border-right: 1px solid var(--line);
+}
+section[data-testid="stSidebar"] h1 {
+  font-family: 'Inter', sans-serif; font-size: 1.05rem; font-weight: 600; color: var(--text);
+}
+section[data-testid="stSidebar"] h3 {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted);
+}
+section[data-testid="stSidebar"] hr { border-top-color: var(--line); margin: .75rem 0; }
+section[data-testid="stSidebar"] .stButton > button {
+  background: transparent; border: 1px solid transparent; color: var(--text);
+  justify-content: flex-start; text-align: left; font-weight: 500;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+  background: rgba(0, 0, 0, .05); border-color: transparent; color: var(--text);
+}
+
+/* ---------- Tombol ---------- */
+.stButton > button, div[data-testid="stFormSubmitButton"] > button,
+[data-testid="stDownloadButton"] button {
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500; font-size: .9rem;
+  min-height: 2.5rem; padding: .45rem .9rem;
+  box-shadow: none;
+  transition: background-color .12s ease, border-color .12s ease;
+}
+.stButton > button:hover, div[data-testid="stFormSubmitButton"] > button:hover {
+  border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+}
+.stButton > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Tombol utama */
+button[kind^="primary"], button[data-testid^="stBaseButton-primary"],
+div[data-testid="stFormSubmitButton"] > button[kind^="primary"] {
+  background: var(--accent) !important; border: 1px solid var(--accent) !important;
+  color: #fff !important; font-weight: 600 !important;
+}
+button[kind^="primary"]:hover, button[data-testid^="stBaseButton-primary"]:hover {
+  background: var(--accent-hover) !important; border-color: var(--accent-hover) !important; color: #fff !important;
 }
 
 /* Tombol Hapus Sesi (merah) */
 .st-key-btn_hapus_sesi .stButton > button {
-    background-color: #dc2626;
-    border-color: #dc2626;
-    color: #ffffff;
-    font-weight: 600;
+  background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600;
 }
 .st-key-btn_hapus_sesi .stButton > button:hover,
 .st-key-btn_hapus_sesi .stButton > button:active,
 .st-key-btn_hapus_sesi .stButton > button:focus:not(:active) {
-    background-color: #b91c1c;
-    border-color: #b91c1c;
-    color: #ffffff;
+  background: #8F1D17; border-color: #8F1D17; color: #fff;
 }
 
-/* Tombol Utama (Primary Blue) */
-div[data-testid="stFormSubmitButton"] > button {
-    background-color: #2563eb !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border-radius: 12px !important;
-    border: none !important;
-    padding: 12px !important;
+/* ---------- Input ---------- */
+[data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="textarea"],
+[data-baseweb="select"] > div, [data-testid="stDateInput"] [data-baseweb="input"] {
+  border-radius: var(--radius) !important;
+  border-color: var(--line-strong) !important;
+  background-color: var(--surface) !important;
 }
-
-/* Menyembunyikan Header bawaan Streamlit */
-header[data-testid="stHeader"] {
-    background-color: transparent;
+[data-baseweb="input"]:focus-within, [data-baseweb="textarea"]:focus-within,
+[data-baseweb="select"]:focus-within > div {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent) !important;
 }
+label, [data-testid="stWidgetLabel"] p { font-size: .85rem; font-weight: 500; color: var(--text); }
 
-/* --- Responsive Mobile Adjustments --- */
+/* ---------- Expander: panah dipertegas ---------- */
+[data-testid="stExpander"] {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: none;
+}
+[data-testid="stExpander"] details { border: none; }
+[data-testid="stExpander"] summary { padding: .7rem 1rem; font-weight: 500; }
+[data-testid="stExpander"] summary:hover { background: rgba(0, 0, 0, .025); }
+[data-testid="stExpander"] summary [data-testid="stExpanderToggleIcon"],
+[data-testid="stExpander"] summary svg {
+  color: var(--accent); font-size: 1.5rem; width: 1.5rem; height: 1.5rem;
+}
+[data-testid="stExpander"] summary [data-testid="stExpanderToggleIcon"] {
+  font-variation-settings: 'wght' 600;
+}
+[data-testid="stExpander"] summary svg { stroke-width: 2.6; }
+
+/* ---------- Kartu / kontainer ---------- */
+[data-testid="stVerticalBlockBorderWrapper"] { border-color: var(--line); border-radius: 10px; }
+[data-testid="stForm"] { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+
+/* ---------- Tab ---------- */
+button[data-baseweb="tab"] { font-weight: 500; color: var(--muted); }
+button[data-baseweb="tab"][aria-selected="true"] { color: var(--accent); }
+[data-baseweb="tab-highlight"] { background-color: var(--accent) !important; height: 2px; }
+[data-baseweb="tab-border"] { background-color: var(--line) !important; }
+
+/* ---------- Peringatan, tabel, chat ---------- */
+[data-testid="stAlert"] { border-radius: var(--radius); border: 1px solid var(--line); box-shadow: none; }
+[data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: var(--radius); }
+[data-testid="stChatInput"] { border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); }
+[data-testid="stChatInput"]:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+code { background: #F0EEE8; color: var(--text); border-radius: 4px; }
+[data-testid="stPopoverBody"], [data-baseweb="popover"] > div { border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+
+/* ---------- Penyesuaian komponen buatan sendiri ---------- */
+.st-key-chat_fab button { box-shadow: 0 1px 4px rgba(0, 0, 0, .18) !important; background: var(--accent) !important;
+  border-color: var(--accent) !important; color: #fff !important; }
+.st-key-chat_panel { box-shadow: 0 6px 24px rgba(0, 0, 0, .12) !important; border-color: var(--line) !important; }
+[class*="st-key-pdetail_"] { box-shadow: 0 6px 20px rgba(0, 0, 0, .10) !important; border-color: var(--line) !important; }
+.login-brand h1 { font-family: 'Source Serif 4', Georgia, serif; }
+
+/* Opsional, uji dulu: emoji tampil monokrom (Chrome/Edge baru; hasil bergantung font) */
+/* .stApp { font-variant-emoji: text; } */
+
+/* ---------- Responsif ---------- */
 @media (max-width: 768px) {
-    .block-container {
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-        padding-top: 1rem !important;
-    }
-    div[style*="max-width: 80%"], div[style*="max-width: 85%"] {
-        max-width: 92% !important;
-    }
+  .block-container { padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 1rem !important; }
+  div[style*="max-width: 80%"], div[style*="max-width: 85%"] { max-width: 92% !important; }
 }
-
-/* --- Tabel gaya log aktivitas (daftar akun & data pasien) dengan tombol --- */
-[class*="st-key-gtbl_"] [data-testid="stHorizontalBlock"] { gap: 0; align-items: center; }
-[class*="st-key-gtbl_wrap"] { gap: 0; }
-[class*="st-key-gtbl_box"] { gap: 0; padding: 0; border-radius: 12px; overflow: hidden; }
-[class*="st-key-gtbl_h"], [class*="st-key-gtbl_r"] { gap: 0; border-bottom: 1px solid #e2e8f0; }
-[class*="st-key-gtbl_h"] { background-color: #eef1f5; }
-[class*="st-key-gtbl_h"] p { color: #64748b; font-size: 0.85rem; margin: 0; }
-[class*="st-key-gtbl_h_pt"] {
-    border: 1px solid #e2e8f0; border-bottom: none; border-radius: 12px 12px 0 0; padding-right: 15px;
-}
-[class*="st-key-gtbl_box_pt"] { border-top-left-radius: 0; border-top-right-radius: 0; }
-[class*="st-key-gtbl_"] [data-testid="stColumn"],
-[class*="st-key-gtbl_"] [data-testid="column"] {
-    border-right: 1px solid #e2e8f0;
-    padding: 0.5rem 0.75rem;
-    align-self: stretch;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-}
-[class*="st-key-gtbl_"] [data-testid="stColumn"]:last-child,
-[class*="st-key-gtbl_"] [data-testid="column"]:last-child { border-right: none; }

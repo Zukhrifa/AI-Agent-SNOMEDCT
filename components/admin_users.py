@@ -62,7 +62,7 @@ def render_admin_users_page() -> None:
         else:
             st.success("Akun dibuat. Password sementara tampil di tabel di bawah.")
     st.subheader("Daftar akun")
-    st.caption("🔑 Reset password · ⛔/✅ Nonaktifkan/Aktifkan. Password sementara hilang otomatis "
+    st.caption("Reset password · ⛔/✅ Nonaktifkan/Aktifkan. Password sementara hilang otomatis "
                "setelah pengguna berhasil login.")
     accounts = service.list_accounts(admin["id"])
     with st.container(border=True, key="gtbl_box_acc"):

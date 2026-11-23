@@ -16,7 +16,11 @@ from database import (
 from modules.ai_agent import DEFAULT_QUICK_ACTIONS
 from modules.rag_snomed import warmup
 
-st.set_page_config(page_title="Medical Anamnesis System", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="Medical Anamnesis System", page_icon=":material/monitor_heart:", layout="wide")
+from pathlib import Path
+_css = Path(__file__).parent / "style.css"
+if _css.exists():
+    st.markdown(f"<style>{_css.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 from auth.session import require_login
 from components.admin_profile import render_profile_page
 user = require_login()
@@ -67,12 +71,12 @@ def render_roomchat_view():
         st.caption(f"Nomor Kunjungan: {active['mrn']}")
 
     with col_data:
-        if st.button("🗂 Data Pasien", key="open_patient_data", use_container_width=True):
+        if st.button("Data Pasien", key="open_patient_data", use_container_width=True):
             go_to_patient_data(active["mrn"])
             st.rerun()
 
     with col_btn:
-        with st.popover("⚙️ Menu", use_container_width=True):
+        with st.popover("Menu", use_container_width=True):
             st.markdown("### Pengaturan Sesi")
 
             # Edit nama pasien
@@ -88,7 +92,7 @@ def render_roomchat_view():
             st.divider()
 
             # Clear chat
-            if st.button("🔄 Clear Chat", use_container_width=True):
+            if st.button(" Clear Chat", use_container_width=True):
                 st.session_state.messages = []
                 st.session_state.pending_input = None
                 st.session_state.quick_actions = list(DEFAULT_QUICK_ACTIONS)

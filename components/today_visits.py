@@ -291,5 +291,5 @@ def _rows_list(rows: list, day: str, can_edit: bool):
 def render_today_page():
     user = current_user() or {}
     st.session_state.today_mrn = None        # halaman detail pasien dihapus; bersihkan sisa URL lama (t=)
-    st.title("📅 Kunjungan Hari Ini" if _selected_day() == today_str() else "📅 Riwayat Kunjungan")
+    st.title("Kunjungan Hari Ini" if _selected_day() == today_str() else "📅 Riwayat Kunjungan")
     _page_list(user.get("role") in TODAY_EDIT_ROLES)
