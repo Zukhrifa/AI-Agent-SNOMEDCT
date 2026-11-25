@@ -12,7 +12,7 @@ from auth import audit_log
 from database import (add_supporting, approve_anamnesis, delete_supporting, get_patient,
                       list_anamnesis_results, list_supporting, save_anamnesis_result,
                       update_patient)
-from modules.ai_agent import (FINAL_REQUEST_TEXT, REGENERATE_REQUEST_TEXT, build_evidence, friendly_error, get_candidates,
+from modules.ai_agent import (FINAL_REQUEST_TEXT, term_with_gloss, REGENERATE_REQUEST_TEXT, build_evidence, friendly_error, get_candidates,
                               input_problem, parse_response, run_agent)
 from modules.patient_context import build_patient_context
 
@@ -41,7 +41,7 @@ def _fill_complaints(vno: str, codes: list) -> int:
     for c in codes:
         cid = c.get("conceptId")
         if c.get("kategori") == "gejala" and c.get("match") != "lemah" and cid and cid not in ids:
-            complaints.append({"conceptId": cid, "term": c.get("term", "")})
+            complaints.append({"conceptId": cid, "term": c.get("term", ""), "label": c.get("label", "")})
             ids.add(cid)
             added += 1
     if added:
@@ -97,7 +97,7 @@ def _approval_block(vno: str) -> None:
         st.markdown("**Hasil AI terbaru: draft, belum disetujui**")
         st.write(latest["summary"])
         for c in latest["codes"]:
-            st.markdown(f"- **{c.get('term', '')}** `{c.get('conceptId', '')}`"
+            st.markdown(f"- **{term_with_gloss(c.get('term', ''), c.get('label', ''))}** `{c.get('conceptId', '')}`"
                         + (f" — _{c['certainty']}_" if c.get("certainty") else "")
                         + (f" · istilah {c['match']}" if c.get("match") else ""))
         c_yes, c_no = st.columns(2)

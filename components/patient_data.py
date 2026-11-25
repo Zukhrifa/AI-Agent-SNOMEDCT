@@ -2,6 +2,7 @@ import json
 from datetime import date, datetime
 
 import streamlit as st
+import streamlit.components.v1 as components
 from auth import audit_log
 from auth.session import current_user
 
@@ -24,7 +25,7 @@ from database import (
     update_patient,
     update_patient_name,
 )
-from modules.ai_agent import translate_to_snomed_terms
+from modules.ai_agent import gloss_id, term_with_gloss, translate_to_snomed_terms, translate_terms_to_id
 from modules.patient_context import calc_age
 from modules.patient_profile import FIELDS as PROFILE_FIELDS, allergy_map, get_profile, has_data, save_profile
 from modules.rag_snomed import index_stats, lexical_search, search_terms
@@ -136,20 +137,23 @@ def _collect_search_results(query: str, use_ai: bool):
             if hit["conceptId"] not in seen:
                 seen.add(hit["conceptId"])
                 results.append(hit)
-    return results[:MAX_SEARCH_RESULTS], notes
+    results = results[:MAX_SEARCH_RESULTS]
+    if use_ai:
+        translate_terms_to_id([r['term'] for r in results])
+    return results, notes
 
 
 def _tab_chief_complaint(mrn: str, patient: dict):
     st.caption(
         "Terisi otomatis dari hasil analisis AI. Bisa juga ditambah manual: ketik dalam bahasa "
-        "Indonesia atau Inggris, lalu pilih dari hasil pencarian SNOMED CT."
+        "Indonesia atau Inggris, lalu pilih dari hasil pencarian SNOMED CT. Arti Indonesia tampil di dalam kurung."
     )
     current = list(patient.get("chief_complaints") or [])
 
     if current:
         for i, item in enumerate(current):
-            col_text, col_del = st.columns([11, 1])
-            col_text.markdown(f"• **{item['term']}** `{item['conceptId']}`")
+            col_text, col_del = st.columns([6, 1])
+            col_text.markdown(f"• **{term_with_gloss(item['term'], item.get('label', ''))}** `{item['conceptId']}`")
             if col_del.button(":material/delete:", key=f"kc_del_{mrn}_{i}", help="Hapus"):
                 gone = current.pop(i)
                 update_patient(mrn, chief_complaints=current)
@@ -178,12 +182,12 @@ def _tab_chief_complaint(mrn: str, patient: dict):
         st.caption(note)
 
     if results:
-        options = {f"{r['term']}  ({r['conceptId']})": r for r in results}
+        options = {f"{term_with_gloss(r['term'])}  [{r['conceptId']}]": r for r in results}
         pick = st.selectbox("Hasil pencarian SNOMED CT", list(options), key=f"kc_pick_{mrn}")
         if st.button(":material/add: Tambahkan sebagai keluhan utama", key=f"kc_add_{mrn}"):
             chosen = options[pick]
             if chosen["conceptId"] not in {c["conceptId"] for c in current}:
-                current.append({"conceptId": chosen["conceptId"], "term": chosen["term"]})
+                current.append({"conceptId": chosen["conceptId"], "term": chosen["term"], "label": gloss_id(chosen["term"])})
                 update_patient(mrn, chief_complaints=current)
                 audit_log.log("keluhan_tambah", mrn, f"{chosen['term']} {chosen['conceptId']}")
             st.rerun()
@@ -206,9 +210,9 @@ def _tab_results(mrn: str, patient: dict):
     findings = list(patient.get("confirmed_findings") or [])
     if findings:
         for i, item in enumerate(findings):
-            col_text, col_del = st.columns([11, 1])
+            col_text, col_del = st.columns([6, 1])
             kategori = CATEGORY_NAMES.get(item.get("kategori", ""), "")
-            col_text.markdown(f"• {kategori}: **{item['term']}** `{item['conceptId']}`")
+            col_text.markdown(f"• {kategori}: **{term_with_gloss(item['term'], item.get('label', ''))}** `{item['conceptId']}`")
             if col_del.button(":material/delete:", key=f"cf_del_{mrn}_{i}", help="Hapus temuan"):
                 gone = findings.pop(i)
                 update_patient(mrn, confirmed_findings=findings)
@@ -233,7 +237,7 @@ def _tab_results(mrn: str, patient: dict):
                     match = c.get("match", "")
                     certainty = c.get("certainty", "")
                     note = (f" — _{certainty}_" if certainty else "") + (f" · istilah {match}" if match else "")
-                    st.markdown(f"- {kategori}: **{c['term']}** `{c['conceptId']}`{note}")
+                    st.markdown(f"- {kategori}: **{term_with_gloss(c['term'], c.get('label', ''))}** `{c['conceptId']}`{note}")
 
 
 def _tab_logs(mrn: str):
@@ -633,6 +637,10 @@ def _page_visit(mrn: str, vno: str):
         st.rerun()
     audit_log.log_once("pasien_lihat", vno)
     archived = bool(visit.get("archived"))
+    if st.session_state.get("_scrolled_visit") != vno:   # buka halaman selalu dari atas
+        st.session_state["_scrolled_visit"] = vno
+        components.html("<script>const m=window.parent.document.querySelector('[data-testid=stMain]');"
+                        "if(m)m.scrollTo(0,0);</script>", height=0)
 
     col_info, col_chat, col_back = st.columns([5, 2, 2])
     with col_info:
@@ -662,11 +670,10 @@ def _page_visit(mrn: str, vno: str):
         st.markdown("#### Hasil Anamnesis AI")
         _tab_results(vno, patient)
 
-    # Jarang dibuka: tetap sebagai tab
-    tab_log, tab_chat = st.tabs(["Riwayat Aktivitas", "Riwayat Roomchat"])
-    with tab_log:
+    # Jarang dibuka: dimuat hanya bila dipilih (hemat query & tanpa auto-refresh saat halaman dibuka)
+    if st.toggle("Tampilkan riwayat aktivitas", key=f"show_log_{vno}"):
         audit_log.live(_tab_logs)(vno)
-    with tab_chat:
+    if st.toggle("Tampilkan riwayat roomchat", key=f"show_chat_{vno}"):
         _tab_chat_history(vno)
     render_floating_chat(vno, patient["name"], _fmt_date(visit["visit_date"]), archived)
 

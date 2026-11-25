@@ -139,6 +139,65 @@ Aturan tool: tanda bahaya, checklist, dan data pasien SUDAH tersedia di atas, ja
 {"status": "tool", "calls": [{"tool": "nama_tool", "args": {}}]}
 Sebagian besar giliran TIDAK memerlukan tool: langsung jawab (status ask, final, atau insufficient).
 """
+# Arti istilah SNOMED (Inggris) -> Indonesia. Lokal dulu (instan); sisanya lewat AI hanya saat pencarian.
+ID_GLOSS = {
+    "chest pain": "nyeri dada", "dyspnea": "sesak napas", "shortness of breath": "sesak napas",
+    "dizziness": "pusing", "vertigo": "vertigo (pusing berputar)", "palpitations": "jantung berdebar",
+    "syncope": "pingsan", "presyncope": "hampir pingsan", "fatigue": "mudah lelah", "weakness": "lemas",
+    "nausea": "mual", "vomiting": "muntah", "fever": "demam", "cough": "batuk", "headache": "sakit kepala",
+    "cold sweat": "keringat dingin", "sweating": "berkeringat", "orthopnea": "sesak saat berbaring",
+    "edema": "bengkak (edema)", "leg swelling": "kaki bengkak", "edema of lower limb": "bengkak tungkai",
+    "angina pectoris": "nyeri dada angina", "unstable angina": "angina tidak stabil",
+    "myocardial infarction": "serangan jantung (infark miokard)", "heart attack": "serangan jantung",
+    "acute myocardial infarction": "serangan jantung akut", "acute myocardial ischemia": "iskemia miokard akut",
+    "heart failure": "gagal jantung", "coronary artery disease": "penyakit jantung koroner",
+    "hypertension": "tekanan darah tinggi", "hypotension": "tekanan darah rendah",
+    "diabetes mellitus": "kencing manis", "hypercholesterolemia": "kolesterol tinggi",
+    "hyperlipidemia": "lemak darah tinggi", "dyslipidemia": "gangguan lemak darah",
+    "atrial fibrillation": "fibrilasi atrium", "tachycardia": "denyut jantung cepat",
+    "bradycardia": "denyut jantung lambat", "arrhythmia": "gangguan irama jantung",
+    "left ventricular hypertrophy": "penebalan bilik kiri jantung", "ecg: left ventricular hypertrophy": "EKG: penebalan bilik kiri",
+    "st segment depression": "ST depresi (EKG)", "st elevation": "ST elevasi (EKG)", "stroke": "stroke",
+    "smoker": "perokok", "obesity": "obesitas", "family history of coronary artery disease": "riwayat keluarga penyakit jantung koroner",
+    "cardiomegaly": "pembesaran jantung", "aortic stenosis": "penyempitan katup aorta",
+    "mitral regurgitation": "kebocoran katup mitral", "pulmonary edema": "cairan di paru",
+    "pleural effusion": "cairan di selaput paru", "hyperglycemia": "gula darah tinggi",
+}
+_GLOSS_CACHE = {}
+
+
+def gloss_id(term: str) -> str:
+    """Arti Indonesia sebuah istilah SNOMED, atau '' bila belum diketahui (tanpa memanggil AI)."""
+    key = " ".join((term or "").lower().split())
+    return ID_GLOSS.get(key) or _GLOSS_CACHE.get(key, "")
+
+
+def translate_terms_to_id(terms) -> None:
+    """Isi cache arti Indonesia untuk istilah yang belum dikenal (satu panggilan AI kecil)."""
+    todo = [t for t in dict.fromkeys(terms or []) if t and not gloss_id(t)][:10]
+    if not todo:
+        return
+    prompt = ("Terjemahkan tiap istilah medis Inggris berikut ke bahasa Indonesia yang singkat dan awam "
+              "(maks 5 kata). Balas HANYA objek JSON {\"istilah\": \"arti\"}.\n" + json.dumps(todo))
+    try:
+        raw = "".join(_stream_llm([HumanMessage(content=prompt)], max_tokens=300, timeout=15))
+        data = json.loads(re.search(r"\{.*\}", raw, re.DOTALL).group(0))
+    except Exception:
+        return
+    for k, v in data.items():
+        if isinstance(v, str) and v.strip():
+            _GLOSS_CACHE[" ".join(str(k).lower().split())] = v.strip()[:60]
+
+
+def term_with_gloss(term: str, label: str = "") -> str:
+    """'Chest pain (nyeri dada)': pakai label Indonesia dari AI bila ada, kalau tidak kamus lokal."""
+    arti = ""
+    if label and label.strip().lower() != (term or "").strip().lower():
+        arti = label.strip()
+    arti = arti or gloss_id(term)
+    return f"{term} ({arti})" if arti else term
+
+
 TRANSLATE_PROMPT = """Anda penerjemah istilah medis untuk pencarian SNOMED CT.
 Ubah masukan (bahasa Indonesia atau bahasa awam lain) menjadi 1 sampai 3 istilah medis berbahasa Inggris yang baku dan sependek mungkin, bergaya SNOMED CT.
 Balas HANYA berupa array JSON berisi string, tanpa teks lain.

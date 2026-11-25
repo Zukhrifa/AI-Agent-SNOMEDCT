@@ -174,3 +174,9 @@ code { background: #F0EEE8; color: var(--text); border-radius: 4px; }
   justify-content: flex-start !important;
   text-align: left !important;
 }
+
+/* Kotak info/peringatan tanpa ikon bawaan */
+[data-testid="stAlertDynamicIcon"],
+[data-testid="stAlert"] [data-testid="stAlertContainer"] > div:first-child:has(svg) {
+  display: none !important;
+}
