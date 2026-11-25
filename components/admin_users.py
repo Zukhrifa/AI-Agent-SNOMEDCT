@@ -8,8 +8,8 @@ _W = [2.3, 1.1, 1.7, 2.1, 1.8, 0.7, 0.7]
 _HEAD = ["Nama", "Peran", "Status", "Password sementara", "Login terakhir (WIB)", "Reset", "Aktif"]
 def _status(a: dict) -> str:
     if not a["is_active"]:
-        return "⛔ Nonaktif"
-    return "🕓 Menunggu login pertama" if a["has_temp_password"] else "✅ Aktif"
+        return ":material/block: Nonaktif"
+    return ":material/schedule: Menunggu login pertama" if a["has_temp_password"] else ":material/check_circle: Aktif"
 @_dialog("Konfirmasi")
 def _confirm(admin_id: int, target: dict, action: str) -> None:
     name = f"**{target['full_name']}** (@{target['username']})"
@@ -44,7 +44,7 @@ def _log_view(accounts: list) -> None:
     st.caption(f"Diperbarui otomatis tiap {audit_log.LIVE_SECONDS} detik.")
 def render_admin_users_page() -> None:
     admin = require_admin()
-    if st.button("← Kembali", key="admin_back"):
+    if st.button(":material/arrow_back: Kembali", key="admin_back"):
         close_account_page()
         st.rerun()
     st.title("Kelola Akun")
@@ -62,29 +62,27 @@ def render_admin_users_page() -> None:
         else:
             st.success("Akun dibuat. Password sementara tampil di tabel di bawah.")
     st.subheader("Daftar akun")
-    st.caption("Reset password · ⛔/✅ Nonaktifkan/Aktifkan. Password sementara hilang otomatis "
+    st.caption(":material/key: Reset password · :material/block: / :material/check_circle: Nonaktifkan/Aktifkan. Password sementara hilang otomatis "
                "setelah pengguna berhasil login.")
     accounts = service.list_accounts(admin["id"])
-    with st.container(border=True, key="gtbl_box_acc"):
-        with st.container(key="gtbl_h_acc"):
-            for c, title in zip(st.columns(_W), _HEAD):
-                c.caption(title)
-        for a in accounts:
-            me = a["id"] == admin["id"]
-            with st.container(key=f"gtbl_r_acc_{a['id']}"):
-                c = st.columns(_W)
-                c[0].markdown(f"**{a['full_name']}**{' (Anda)' if me else ''}  \n@{a['username']}")
-                c[1].write(service.ROLE_LABEL.get(a["role"], a["role"]))
-                c[2].write(_status(a))
-                if a["temp_password"]:
-                    c[3].code(a["temp_password"], language=None)
-                else:
-                    c[3].write("-")
-                c[4].write(a["last_login_at"] or "-")
-                if c[5].button("🔑", key=f"rst_{a['id']}", disabled=me, help="Reset password"):
-                    _confirm(admin["id"], a, "reset")
-                if c[6].button("⛔" if a["is_active"] else "✅", key=f"act_{a['id']}", disabled=me,
-                               help="Nonaktifkan akun" if a["is_active"] else "Aktifkan akun"):
-                    _confirm(admin["id"], a, "toggle")
+    cols = st.columns(_W)
+    for c, title in zip(cols, _HEAD):
+        c.markdown(f"**{title}**")
+    for a in accounts:
+        me = a["id"] == admin["id"]
+        c = st.columns(_W)
+        c[0].markdown(f"**{a['full_name']}**{' (Anda)' if me else ''}  \n@{a['username']}")
+        c[1].write(service.ROLE_LABEL.get(a["role"], a["role"]))
+        c[2].write(_status(a))
+        if a["temp_password"]:
+            c[3].code(a["temp_password"], language=None)
+        else:
+            c[3].write("-")
+        c[4].write(a["last_login_at"] or "-")
+        if c[5].button(":material/key:", key=f"rst_{a['id']}", disabled=me, help="Reset password"):
+            _confirm(admin["id"], a, "reset")
+        if c[6].button(":material/block:" if a["is_active"] else ":material/check_circle:", key=f"act_{a['id']}", disabled=me,
+                       help="Nonaktifkan akun" if a["is_active"] else "Aktifkan akun"):
+            _confirm(admin["id"], a, "toggle")
     st.subheader("Log aktivitas")
     audit_log.live(_log_view)(accounts)

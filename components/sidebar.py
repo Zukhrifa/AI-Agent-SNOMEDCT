@@ -12,7 +12,7 @@ def render_sidebar():
         st.session_state.patient_list = []
 
     # --- DATA PASIEN: pencarian pasien, tambah pasien, dan kunjungan dilakukan di halamannya ---
-    st.sidebar.subheader("Data Pasien")
+    st.sidebar.subheader(":material/folder: Data Pasien")
     if st.sidebar.button("Data Pasien", key="sb_data_home", use_container_width=True):
         close_account_page()
         go_to_patient_data()
@@ -22,7 +22,7 @@ def render_sidebar():
     # --- KUNJUNGAN: pasien yang ditandai berkunjung hari ini ---
     user = current_user()
     if user and user["role"] in TODAY_VIEW_ROLES:
-        st.sidebar.subheader("Kunjungan")
+        st.sidebar.subheader(":material/calendar_month: Kunjungan")
         if st.sidebar.button("Kunjungan Pasien", key="sb_today_home", use_container_width=True):
             close_account_page()
             go_to_today()
@@ -30,7 +30,7 @@ def render_sidebar():
         st.sidebar.divider()
 
     # --- ASISTEN KLINIS (umum, bisa membaca data sistem); roomchat pasien dibuka dari data kunjungan ---
-    st.sidebar.subheader("Asisten Klinis")
+    st.sidebar.subheader(":material/chat: Asisten Klinis")
     if st.sidebar.button("Tanya Asisten", key="sb_assistant", use_container_width=True):
         close_account_page()
         go_to_assistant()

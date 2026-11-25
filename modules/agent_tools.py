@@ -501,7 +501,7 @@ def tools_prompt() -> str:
 
 def tool_label(names) -> str:
     labels = [TOOLS[n]["label"] for n in names if n in TOOLS] or ["menjalankan tool"]
-    return "🔧 Agent sedang " + ", ".join(labels) + "..."
+    return "Agent sedang " + ", ".join(labels) + "..."
 
 
 def _summarize(name: str, result: dict) -> str:

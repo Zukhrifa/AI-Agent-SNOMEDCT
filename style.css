@@ -167,3 +167,10 @@ code { background: #F0EEE8; color: var(--text); border-radius: 4px; }
   .block-container { padding-left: 1rem !important; padding-right: 1rem !important; padding-top: 1rem !important; }
   div[style*="max-width: 80%"], div[style*="max-width: 85%"] { max-width: 92% !important; }
 }
+
+/* Menu popover: item rata kiri */
+[data-testid="stPopoverBody"] .stButton > button,
+[data-testid="stPopoverBody"] .stButton > button > div {
+  justify-content: flex-start !important;
+  text-align: left !important;
+}

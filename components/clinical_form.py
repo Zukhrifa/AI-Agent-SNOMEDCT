@@ -101,12 +101,12 @@ def _approval_block(vno: str) -> None:
                         + (f" — _{c['certainty']}_" if c.get("certainty") else "")
                         + (f" · istilah {c['match']}" if c.get("match") else ""))
         c_yes, c_no = st.columns(2)
-        if c_yes.button("✅ Akurat: setujui & simpan", key=f"cf_approve_{vno}",
+        if c_yes.button(":material/check_circle: Akurat: setujui & simpan", key=f"cf_approve_{vno}",
                         type="primary", use_container_width=True):
             info = approve_anamnesis(vno, latest["summary"], latest["codes"])
             audit_log.log("ai_setuju", vno, f"{info.get('saved', 0)} temuan SNOMED tersimpan")
             st.rerun()
-        if c_no.button("❌ Tidak akurat: buat ulang", key=f"cf_reject_{vno}", use_container_width=True):
+        if c_no.button(":material/close: Tidak akurat: buat ulang", key=f"cf_reject_{vno}", use_container_width=True):
             audit_log.log("ai_tolak", vno)
             st.session_state[f"cf_flash_{vno}"] = _analyze(vno, previous=latest)
             st.rerun()
@@ -121,7 +121,7 @@ def _supporting_list(vno: str) -> None:
         when = item.get("recorded_on") or (item.get("created_at") or "")[:10]
         with st.expander(f"{item['category']} — {when}"):
             st.write(item["content"])
-            if st.button("🗑 Hapus", key=f"pj_del_{item['id']}"):
+            if st.button(":material/delete: Hapus", key=f"pj_del_{item['id']}"):
                 delete_supporting(item["id"])
                 audit_log.log("penunjang_hapus", vno, item["category"])
                 st.rerun()
@@ -176,8 +176,8 @@ def render_clinical_form(vno: str) -> None:
         pj_text = st.text_area("Hasil / interpretasi", height=100, key=f"cf_pj_{vno}_{n}",
                                placeholder="Contoh EKG: sinus rhythm, ST elevasi V1-V4 ...")
 
-        b_analyze = st.form_submit_button("▶ Simpan & Analisis", type="primary", use_container_width=True)
-        b_save = st.form_submit_button("💾 Simpan saja", use_container_width=True)
+        b_analyze = st.form_submit_button(":material/play_arrow: Simpan & Analisis", type="primary", use_container_width=True)
+        b_save = st.form_submit_button(":material/save: Simpan saja", use_container_width=True)
 
     if b_analyze or b_save:
         physical = {"td_sistolik": td_s, "td_diastolik": td_d, "nadi": nadi, "rr": rr,

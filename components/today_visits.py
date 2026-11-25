@@ -60,10 +60,10 @@ def _init_table() -> bool:
 
 
 STATUS = {
-    "menunggu": ("⚪", "Menunggu"),
-    "diisi": ("🟡", "Sedang diisi"),
-    "persetujuan": ("🟠", "Menunggu persetujuan"),
-    "selesai": ("🟢", "Selesai"),
+    "menunggu": (":gray[●]", "Menunggu"),
+    "diisi": (":orange[●]", "Sedang diisi"),
+    "persetujuan": (":blue[●]", "Menunggu persetujuan"),
+    "selesai": (":green[●]", "Selesai"),
 }
 
 
@@ -199,7 +199,7 @@ def _page_list(can_edit: bool):
     if picked != day:
         st.session_state.today_day = None if picked == today else picked
         st.rerun()
-    if not is_today and c_now.button("↩ Hari ini", key="today_reset", use_container_width=True):
+    if not is_today and c_now.button(":material/undo: Hari ini", key="today_reset", use_container_width=True):
         st.session_state.today_day = None
         st.rerun()
 
@@ -211,7 +211,7 @@ def _page_list(can_edit: bool):
         st.caption(f"Riwayat pasien yang berkunjung pada {_fmt_date(day)} (hanya-baca).")
 
     if can_edit:
-        with st.expander("➕ Atur pasien hari ini", expanded=not rows):
+        with st.expander(":material/add: Atur pasien hari ini", expanded=not rows):
             in_today = {p["mrn"] for p in rows}
             options = [p for p in _overview() if p["mrn"] not in in_today]
             labels = {p["mrn"]: f"{p['name']} ({p['mrn']})" for p in options}
@@ -241,15 +241,15 @@ def _render_row(no, r, statuses, allergies, day, can_edit, notice, done=False):
         cols = st.columns([2.6, 6, 1.5, 1.7, 0.7] if can_edit else [2.6, 6, 1.5, 1.7])
         cols[0].markdown(f"**No. {no}** · {icon} {label}")
         info = (f"**{r['name']}** · `{mrn}` · {r.get('sex') or '—'} · lahir {dob} · "
-                + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
+                + (f":material/warning: Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
         cols[1].markdown(f":gray[{info}]" if done else info)
-        if cols[2].button("📂 Data", key=f"today_data_{mrn}", use_container_width=True):
+        if cols[2].button(":material/folder_open: Data", key=f"today_data_{mrn}", use_container_width=True):
             v = _resolve_visit(mrn, day)
             if v:
                 go_to_patient_data(v["visit_no"])
                 st.rerun()
             notice.warning("Tidak ada kunjungan pada tanggal ini.")
-        if cols[3].button("💬 Roomchat", key=f"today_chat_{mrn}", use_container_width=True):
+        if cols[3].button(":material/chat: Roomchat", key=f"today_chat_{mrn}", use_container_width=True):
             v = _resolve_visit(mrn, day)
             if not v:
                 notice.warning("Tidak ada kunjungan pada tanggal ini.")
@@ -258,7 +258,7 @@ def _render_row(no, r, statuses, allergies, day, can_edit, notice, done=False):
             else:
                 open_roomchat_for_mrn(v["visit_no"])
                 st.rerun()
-        if can_edit and cols[4].button("🗑", key=f"today_del_{mrn}",
+        if can_edit and cols[4].button(":material/delete:", key=f"today_del_{mrn}",
                                        help="Keluarkan dari daftar hari ini"):
             _remove_today(mrn)
             st.rerun()
@@ -283,7 +283,7 @@ def _rows_list(rows: list, day: str, can_edit: bool):
         st.success("Semua pasien hari ini sudah selesai diperiksa.")
     if done:
         st.divider()
-        st.markdown(f"##### ✅ Sudah selesai diperiksa ({len(done)})")
+        st.markdown(f"##### :material/check_circle: Sudah selesai diperiksa ({len(done)})")
         for n, r in done:
             _render_row(n, r, statuses, allergies, day, can_edit, notice, done=True)
 
@@ -291,5 +291,5 @@ def _rows_list(rows: list, day: str, can_edit: bool):
 def render_today_page():
     user = current_user() or {}
     st.session_state.today_mrn = None        # halaman detail pasien dihapus; bersihkan sisa URL lama (t=)
-    st.title("Kunjungan Hari Ini" if _selected_day() == today_str() else "📅 Riwayat Kunjungan")
+    st.title(":material/calendar_month: Kunjungan Hari Ini" if _selected_day() == today_str() else ":material/calendar_month: Riwayat Kunjungan")
     _page_list(user.get("role") in TODAY_EDIT_ROLES)

@@ -71,12 +71,12 @@ def render_roomchat_view():
         st.caption(f"Nomor Kunjungan: {active['mrn']}")
 
     with col_data:
-        if st.button("Data Pasien", key="open_patient_data", use_container_width=True):
+        if st.button(":material/folder: Data Pasien", key="open_patient_data", use_container_width=True):
             go_to_patient_data(active["mrn"])
             st.rerun()
 
     with col_btn:
-        with st.popover("Menu", use_container_width=True):
+        with st.popover(":material/settings: Menu", use_container_width=True):
             st.markdown("### Pengaturan Sesi")
 
             # Edit nama pasien
@@ -92,7 +92,7 @@ def render_roomchat_view():
             st.divider()
 
             # Clear chat
-            if st.button(" Clear Chat", use_container_width=True):
+            if st.button(":material/refresh: Clear Chat", use_container_width=True):
                 st.session_state.messages = []
                 st.session_state.pending_input = None
                 st.session_state.quick_actions = list(DEFAULT_QUICK_ACTIONS)
@@ -104,6 +104,7 @@ def render_roomchat_view():
                 audit_log.log("chat_clear", active["mrn"])
                 st.session_state.patient_list = get_all_consultations()
                 st.rerun()
+
 
     render_context_panel(active["mrn"])
     render_chat_room()

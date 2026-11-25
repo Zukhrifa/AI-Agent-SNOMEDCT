@@ -43,11 +43,11 @@ def render_force_password_change(user: dict) -> None:
 def _llm_section() -> None:
     """AI bawaan sistem untuk semua pengguna; API key pribadi (Gemini/OpenAI/Claude) hanya berlaku
     untuk akun ini dan hanya di memori sesi (tidak ditulis ke database)."""
-    st.subheader("Penyedia AI & API Key")
+    st.subheader(":material/key: Penyedia AI & API Key")
     cfg = get_user_llm()
     if cfg:
         st.success(f"Memakai {PROVIDERS[cfg['provider']]['label']} · {cfg['model']} dengan API key pribadi "
-                   f"Anda (hanya untuk sesi ini).", icon="✅")
+                   f"Anda (hanya untuk sesi ini).", icon=":material/check_circle:")
     else:
         st.info(f"Memakai AI bawaan sistem (Gemini {MODEL_NAME}). Isi API key di bawah jika ingin memakai "
                 "akun AI Anda sendiri.", icon="ℹ️")
@@ -83,7 +83,7 @@ def render_profile_page() -> None:
     user = current_user()
     if not user:
         return
-    if st.button("← Kembali", key="profile_back"):
+    if st.button(":material/arrow_back: Kembali", key="profile_back"):
         close_account_page()
         st.rerun()
     st.title("Profil")

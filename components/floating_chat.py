@@ -1,4 +1,4 @@
-"""Roomchat melayang (floating) di halaman kunjungan: tombol 💬 di pojok kanan bawah membuka panel
+"""Roomchat melayang (floating) di halaman kunjungan: tombol chat di pojok kanan bawah membuka panel
 roomchat kunjungan yang sedang dibuka, sementara data kunjungan tetap terlihat dan bisa dibandingkan.
 Memakai ulang fungsi di chat_ui.py (bubble, persetujuan, agent), jadi chat_ui.py tidak perlu diubah.
 Panel adalah fragment: kirim pesan hanya memuat ulang panel, bukan seluruh halaman data."""
@@ -56,7 +56,7 @@ def _chat_body():
 
     C.render_voice_button()
     toggle = getattr(st, "toggle", None) or st.checkbox
-    ss.agent_pref = bool(toggle("⚡ Mode agent (tool)", value=ss.get("agent_pref", True),
+    ss.agent_pref = bool(toggle(":material/bolt: Mode agent (tool)", value=ss.get("agent_pref", True),
                                 key="agent_toggle_float",
                                 help="Nonaktif: mode cepat, 1 panggilan AI per pesan."))
 
@@ -103,7 +103,7 @@ def _chat_body():
             st.caption("Anamnesis selesai dan tersimpan di Data Pasien. Tambahkan informasi baru "
                        "di kotak pesan bila ingin memperbarui kesimpulan.")
         elif active_q:
-            st.info(f"❓ **Tanyakan ke pasien:** {active_q}\n\nKetik atau ucapkan **jawaban pasien** di bawah.")
+            st.info(f":material/help: **Tanyakan ke pasien:** {active_q}\n\nKetik atau ucapkan **jawaban pasien** di bawah.")
             if st.button("Batal", key="fcancel_q"):
                 ss.active_question = None
                 _rerun_panel()
@@ -114,7 +114,7 @@ def _chat_body():
                     ss.active_question_mrn = patient["mrn"]
                     _rerun_panel()
             if has_user_msg and not last_final:
-                if st.button("📋 Minta Kesimpulan Sekarang", key="fask_final"):
+                if st.button(":material/summarize: Minta Kesimpulan Sekarang", key="fask_final"):
                     C.send_user_message(FINAL_REQUEST_TEXT)
                     _rerun_panel()
 
@@ -145,7 +145,7 @@ def render_floating_chat(vno: str, name: str, date_text: str, archived: bool = F
     st.markdown(_CSS, unsafe_allow_html=True)
     is_open = st.session_state.get("fchat_for") == vno
     with st.container(key="chat_fab"):
-        if st.button("✕" if is_open else "💬", key="chat_fab_btn", help="Roomchat kunjungan ini"):
+        if st.button(":material/close:" if is_open else ":material/chat:", key="chat_fab_btn", help="Roomchat kunjungan ini"):
             st.session_state["fchat_for"] = None if is_open else vno
             st.rerun()
     if is_open:

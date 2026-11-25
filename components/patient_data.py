@@ -104,7 +104,7 @@ def _tab_identity(mrn: str, patient: dict):
             "Jenis kelamin", SEX_OPTIONS, key=f"id_sex_{mrn}",
             index=SEX_OPTIONS.index(sex_value) if sex_value in SEX_OPTIONS else 0,
         )
-        st.form_submit_button("💾 Simpan Identitas", on_click=_save_identity, args=(mrn,))
+        st.form_submit_button(":material/save: Simpan Identitas", on_click=_save_identity, args=(mrn,))
     kind, text = st.session_state.pop("_id_msg", (None, None))
     if kind:
         (st.error if kind == "error" else st.success)(text)
@@ -128,7 +128,7 @@ def _collect_search_results(query: str, use_ai: bool):
         if variants:
             notes.append("Istilah Inggris dari AI: " + ", ".join(variants))
         elif error:
-            notes.append(f"⚠️ Terjemahan AI tidak tersedia ({error}). Memakai pencarian langsung.")
+            notes.append(f":material/warning: Terjemahan AI tidak tersedia ({error}). Memakai pencarian langsung.")
 
     results, seen = [], set()
     for term_query in variants + [query]:
@@ -150,7 +150,7 @@ def _tab_chief_complaint(mrn: str, patient: dict):
         for i, item in enumerate(current):
             col_text, col_del = st.columns([11, 1])
             col_text.markdown(f"• **{item['term']}** `{item['conceptId']}`")
-            if col_del.button("🗑", key=f"kc_del_{mrn}_{i}", help="Hapus"):
+            if col_del.button(":material/delete:", key=f"kc_del_{mrn}_{i}", help="Hapus"):
                 gone = current.pop(i)
                 update_patient(mrn, chief_complaints=current)
                 audit_log.log("keluhan_hapus", mrn, f"{gone['term']} {gone['conceptId']}")
@@ -159,7 +159,7 @@ def _tab_chief_complaint(mrn: str, patient: dict):
         st.info("Belum ada keluhan utama.")
 
     use_ai = st.checkbox(
-        "🌐 Terjemahkan dengan AI (Indonesia → istilah SNOMED Inggris)",
+        ":material/translate: Terjemahkan dengan AI (Indonesia → istilah SNOMED Inggris)",
         value=True, key=f"kc_ai_{mrn}",
     )
     query = st.text_input(
@@ -180,7 +180,7 @@ def _tab_chief_complaint(mrn: str, patient: dict):
     if results:
         options = {f"{r['term']}  ({r['conceptId']})": r for r in results}
         pick = st.selectbox("Hasil pencarian SNOMED CT", list(options), key=f"kc_pick_{mrn}")
-        if st.button("➕ Tambahkan sebagai keluhan utama", key=f"kc_add_{mrn}"):
+        if st.button(":material/add: Tambahkan sebagai keluhan utama", key=f"kc_add_{mrn}"):
             chosen = options[pick]
             if chosen["conceptId"] not in {c["conceptId"] for c in current}:
                 current.append({"conceptId": chosen["conceptId"], "term": chosen["term"]})
@@ -209,7 +209,7 @@ def _tab_results(mrn: str, patient: dict):
             col_text, col_del = st.columns([11, 1])
             kategori = CATEGORY_NAMES.get(item.get("kategori", ""), "")
             col_text.markdown(f"• {kategori}: **{item['term']}** `{item['conceptId']}`")
-            if col_del.button("🗑", key=f"cf_del_{mrn}_{i}", help="Hapus temuan"):
+            if col_del.button(":material/delete:", key=f"cf_del_{mrn}_{i}", help="Hapus temuan"):
                 gone = findings.pop(i)
                 update_patient(mrn, confirmed_findings=findings)
                 audit_log.log("temuan_hapus", mrn, f"{gone['term']} {gone['conceptId']}")
@@ -223,7 +223,7 @@ def _tab_results(mrn: str, patient: dict):
         st.info("Belum ada kesimpulan anamnesis untuk pasien ini.")
         return
     for r in results:
-        badge = "✅ Disetujui" if r.get("approved") else "belum diverifikasi"
+        badge = ":material/check_circle: Disetujui" if r.get("approved") else "belum diverifikasi"
         with st.expander(f"Kesimpulan — {r['created_at']} • {badge}"):
             st.write(r["summary"])
             if r["codes"]:
@@ -372,7 +372,7 @@ def _profile_view(prof: dict):
         st.caption("Belum diisi. Alergi yang kosong berarti belum diketahui, bukan tidak ada.")
     cols = st.columns(2)
     for i, (key, label) in enumerate(PROFILE_FIELDS):
-        cols[i % 2].markdown(f"**{'⚠️ ' if key == 'alergi' else ''}{label}**\n\n{prof[key] or '—'}")
+        cols[i % 2].markdown(f"**{':material/warning: ' if key == 'alergi' else ''}{label}**\n\n{prof[key] or '—'}")
 
 
 @_fragment
@@ -384,11 +384,11 @@ def _profile_block(mrn: str, in_expander: bool = False):
     # Streamlit tidak mengizinkan expander di dalam expander, jadi di halaman kunjungan
     # (yang sudah dibungkus expander) formulirnya memakai kotak biasa.
     if in_expander:
-        if not st.checkbox("✏️ Ubah riwayat tetap", key=f"pf_edit_{mrn}"):
+        if not st.checkbox(":material/edit: Ubah riwayat tetap", key=f"pf_edit_{mrn}"):
             return
         box = st.container(border=True)
     else:
-        box = st.expander("✏️ Ubah riwayat tetap")
+        box = st.expander(":material/edit: Ubah riwayat tetap")
     with box:
         with st.form(f"form_profile_{mrn}"):
             values = {}
@@ -397,7 +397,7 @@ def _profile_block(mrn: str, in_expander: bool = False):
                     values[key] = st.text_input(label, value=prof[key], key=f"pf_{mrn}_{key}")
                 else:
                     values[key] = st.text_area(label, value=prof[key], height=90, key=f"pf_{mrn}_{key}")
-            save = st.form_submit_button("💾 Simpan", type="primary", use_container_width=True)
+            save = st.form_submit_button(":material/save: Simpan", type="primary", use_container_width=True)
         if save:
             user = current_user() or {}
             save_profile(mrn, values, user.get("full_name") or user.get("username") or "")
@@ -416,8 +416,8 @@ MAX_CARDS = 50
 
 
 def _visit_badges(item: dict) -> list:
-    status = "✅ disetujui" if item.get("approved") else ("belum diverifikasi" if item.get("summary") else "")
-    return [b for b in ("📦 diarsipkan" if item.get("archived") else "", status) if b]
+    status = ":material/check_circle: disetujui" if item.get("approved") else ("belum diverifikasi" if item.get("summary") else "")
+    return [status] if status else []
 
 
 def _render_result_row(prefix: str, item: dict, caption: str):
@@ -433,7 +433,7 @@ def _render_result_row(prefix: str, item: dict, caption: str):
             st.rerun()
         if item["archived"]:
             c_chat.caption("Roomchat diarsipkan")
-        elif c_chat.button("💬 Roomchat", key=f"{prefix}_chat_{vno}", use_container_width=True):
+        elif c_chat.button(":material/chat: Roomchat", key=f"{prefix}_chat_{vno}", use_container_width=True):
             open_roomchat_for_mrn(vno)
             st.rerun()
 
@@ -474,7 +474,7 @@ def _patient_card(r: dict, allergy: str):
     with st.container(border=True, key=f"pcard_{mrn}"):
         c_head, c_btn = st.columns([8, 1.5])
         label = (f"{'▾' if is_open else '▸'}  **{r['name']}** · `{mrn}` · {sub} · "
-                 + (f"⚠️ Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
+                 + (f":material/warning: Alergi: {allergy}" if allergy else "Alergi: belum diisi"))
         if c_head.button(label, key=f"pc_toggle_{mrn}", use_container_width=True):
             st.session_state["pc_open_mrn"] = None if is_open else mrn
             _rerun_local()                   # hanya daftar kartu yang dimuat ulang
@@ -540,13 +540,13 @@ def _page_patients():
     names = {r["mrn"]: r["name"] for r in rows}
     c0, c1, c3 = st.columns([2, 5, 1])
     field = c0.selectbox("Cari berdasarkan", list(SEARCH_FIELDS), key="data_field")
-    query = " ".join(c1.text_input("🔍 Kata kunci", key="data_search", placeholder=SEARCH_FIELDS[field]).split())
+    query = " ".join(c1.text_input(":material/search: Kata kunci", key="data_search", placeholder=SEARCH_FIELDS[field]).split())
     c3.write("")
-    if c3.button("← Kembali", key="dp_back", use_container_width=True):
+    if c3.button(":material/arrow_back: Kembali", key="dp_back", use_container_width=True):
         go_to_today()
         st.rerun()
 
-    with st.expander("➕ Tambah pasien baru", expanded=not names):
+    with st.expander(":material/add: Tambah pasien baru", expanded=not names):
         with st.form("form_new_patient_data", clear_on_submit=True):
             new_name = st.text_input("Nama Pasien")
             new_mrn = st.text_input("Medical Record Number (MRN)")
@@ -582,16 +582,16 @@ def _page_visits(mrn: str):
     col_info, col_new, col_back = st.columns([6, 2, 2])
     col_info.subheader(patient["name"])
     col_info.caption(info)
-    if col_new.button("➕ Kunjungan baru", key="dp_new_visit", use_container_width=True):
+    if col_new.button(":material/add: Kunjungan baru", key="dp_new_visit", use_container_width=True):
         vno = create_visit(mrn)
         audit_log.log("kunjungan_baru", vno)
         go_to_patient_data(vno)
         st.rerun()
-    if col_back.button("← Kembali", key="dp_back_list", use_container_width=True):
+    if col_back.button(":material/arrow_back: Kembali", key="dp_back_list", use_container_width=True):
         go_to_patient_data()
         st.rerun()
 
-    with st.expander("✏️ Ubah identitas pasien"):
+    with st.expander(":material/edit: Ubah identitas pasien"):
         _tab_identity(mrn, patient)
 
     st.markdown("#### Riwayat tetap")
@@ -639,11 +639,11 @@ def _page_visit(mrn: str, vno: str):
         st.subheader(patient["name"])
         st.caption(f"Kunjungan {_fmt_date(visit['visit_date'])} • No. {vno}" + (" • Roomchat diarsipkan" if archived else ""))
     with col_chat:
-        if not archived and st.button("💬 Buka Roomchat", key="dp_open_chat", use_container_width=True):
+        if not archived and st.button(":material/chat: Buka Roomchat", key="dp_open_chat", use_container_width=True):
             open_roomchat_for_mrn(vno)
             st.rerun()
     with col_back:
-        if st.button("← Kembali", key="dp_back_visits", use_container_width=True):
+        if st.button(":material/arrow_back: Kembali", key="dp_back_visits", use_container_width=True):
             go_to_patient_data(mrn)
             st.rerun()
 
@@ -672,7 +672,7 @@ def _page_visit(mrn: str, vno: str):
 
 
 def render_patient_data_page():
-    st.title("Data Pasien")
+    st.title(":material/folder: Data Pasien")
     mrn, vno = st.session_state.get("data_mrn"), st.session_state.get("data_visit")
     if mrn and vno:
         _page_visit(mrn, vno)

@@ -159,7 +159,7 @@ def _open_viewer(doc_id: int, title: str, page=None, section: str = "") -> None:
 def render_source_button(doc_id, title: str, page=None, section: str = "", key: str = "") -> None:
     """Tombol kecil di bawah jawaban AI: buka dokumen asli, langsung ke halaman kutipan
     (verifikasi keaslian sitasi). Kutipan lama tanpa doc_id tampil sebagai teks biasa."""
-    label = f"📄 {title}" + (f", hal. {page}" if page else "") + (f" ({section})" if section else "")
+    label = f"{title}" + (f", hal. {page}" if page else "") + (f" ({section})" if section else "")
     if doc_id is None:
         st.caption(f"- {label}")
         return
@@ -183,11 +183,11 @@ def render_guidelines_page() -> None:
     """Halaman telusur dokumen pedoman: semua peran (admin/dokter/perawat) bisa lihat & unduh.
     Mengunggah dan menghapus hanya lewat menu admin 'Kelola Dokumen'."""
     require_login()
-    if st.button("← Kembali", key="docs_view_back"):
+    if st.button(":material/arrow_back: Kembali", key="docs_view_back"):
         close_account_page()
         st.rerun()
     st.title("Dokumen Pedoman")
-    st.caption("Referensi yang dipakai AI saat menjawab. Pilih halaman lalu klik 👁 untuk membuka jendela "
+    st.caption("Referensi yang dipakai AI saat menjawab. Pilih halaman lalu klik Buka untuk membuka jendela "
                "pratinjau (bisa digeser), atau unduh file asli.")
     docs = rag.list_documents()
     if not docs:
@@ -199,7 +199,7 @@ def render_guidelines_page() -> None:
         c2.caption(f"{d['doc_type'] or '-'}  \n{d['pages']} halaman · diunggah @{d['uploaded_by']}")
         pg = c3.number_input("Hal.", min_value=1, max_value=max(1, int(d["pages"] or 1)), value=1,
                              key=f"pg_{d['id']}", label_visibility="collapsed")
-        if c4.button("👁 Buka", key=f"view_{d['id']}", use_container_width=True):
+        if c4.button(":material/visibility: Buka", key=f"view_{d['id']}", use_container_width=True):
             _open_viewer(d["id"], d["title"], pg)
         with c5:
             render_file_download_button(d, key=f"dl_browse_{d['id']}")

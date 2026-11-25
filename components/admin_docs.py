@@ -92,7 +92,7 @@ def _list_section(admin: dict) -> None:
         c[4].write(f"{d['uploaded_by']}  \n{d['created_at']}")
         with c[5]:
             render_file_download_button(d, key=f"doc_dl_{d['id']}")
-        if c[6].button("🗑", key=f"doc_del_{d['id']}", help="Hapus dokumen"):
+        if c[6].button(":material/delete:", key=f"doc_del_{d['id']}", help="Hapus dokumen"):
             _confirm_delete(admin, d)
 
 
@@ -116,7 +116,7 @@ def _test_section() -> None:
 
 def render_admin_docs_page() -> None:
     admin = require_admin()
-    if st.button("← Kembali", key="docs_back"):
+    if st.button(":material/arrow_back: Kembali", key="docs_back"):
         close_account_page()
         st.rerun()
     st.title("Dokumen Pedoman (RAG)")

@@ -54,10 +54,10 @@ class _BubbleSlot:
     def markdown(self, text: str, tools=None):
         footer = ""
         if tools:
-            footer = ("<div style='margin-top:8px;font-size:12px;color:#64748b;'>🔎 Data sistem dibaca: "
+            footer = ("<div style='margin-top:8px;font-size:12px;color:#64748b;'>Data sistem dibaca: "
                       + ", ".join(AT.TOOLS[x]["label"] for x in tools if x in AT.TOOLS) + "</div>")
         self.slot.markdown(_ai_bubble(text, name=NAME, title="", footer=footer,
-                                      loading=text.startswith(("⏳", "🔎"))), unsafe_allow_html=True)
+                                      loading=text.startswith(("Menyusun", "Membaca"))), unsafe_allow_html=True)
 
 
     def error(self, text: str):
@@ -185,7 +185,7 @@ def render_assistant_page():
     render_voice_button()                            # tombol mikrofon di kotak pesan (seperti roomchat)
     col_title, col_new = st.columns([6, 2])
     col_title.markdown(_header(NAME, "Umum · dokter & perawat"), unsafe_allow_html=True)
-    if ss.asst_messages and col_new.button("🧹 Percakapan baru", key="asst_new", use_container_width=True):
+    if ss.asst_messages and col_new.button(":material/add: Percakapan baru", key="asst_new", use_container_width=True):
         _delete(cid)
         ss.asst_messages = []
         st.rerun()
@@ -209,7 +209,7 @@ def render_assistant_page():
     ss.asst_messages.append({"role": "user", "content": prompt})
     _show(ss.asst_messages[-1])
     slot = _BubbleSlot(st.empty())
-    slot.markdown("⏳ Menyusun jawaban...")
+    slot.markdown("Menyusun jawaban...")
     try:
         answer, used = _answer(ss.asst_messages, _candidates(prompt), use_tools, slot)
     except Exception as e:

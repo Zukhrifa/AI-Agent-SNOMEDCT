@@ -72,7 +72,7 @@ def _panel(mrn: str) -> None:
         f'<div class="nm">{_e(p["name"])}</div><div class="sub">{_e(mrn)}</div>',
         f'<div class="sub">{_e(sub)}</div>' if sub else "",
         "<hr>",
-        _sec("⚠️ Alergi", f"<b>{_e(prof['alergi'])}</b>" if prof["alergi"] else "belum diisi"),
+        _sec("Alergi", f"<b>{_e(prof['alergi'])}</b>" if prof["alergi"] else "belum diisi"),
         _sec("Keluhan utama", complaints),
         _sec("Tanda vital", _vitals(p.get("physical_exam") or {})),
         _sec("Obat rutin", _e(prof["obat"]).replace("\n", "<br>")),
@@ -86,7 +86,7 @@ def _panel(mrn: str) -> None:
     # Desktop: panel tetap di kanan. HP/tablet: dilipat di atas chat (ketuk untuk membuka).
     st.markdown(
         _CSS + f'<div class="rp rc">{body}</div>'
-        f'<details class="rpm rc"><summary>📋 Konteks &amp; log pasien</summary>{body}</details>',
+        f'<details class="rpm rc"><summary>Konteks &amp; log pasien</summary>{body}</details>',
         unsafe_allow_html=True,
     )
 

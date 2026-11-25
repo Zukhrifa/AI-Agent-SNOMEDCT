@@ -142,7 +142,7 @@ def _user_bubble(msg: dict) -> str:
     if msg.get("question") and msg.get("answer"):
         body = (
             "<div style='font-size:12px;opacity:0.85;margin-bottom:4px;'>"
-            f"❓ {html.escape(msg['question'])}</div>{_fmt(msg['answer'])}"
+            f"{html.escape(msg['question'])}</div>{_fmt(msg['answer'])}"
         )
     else:
         body = _fmt(msg["content"])
@@ -221,7 +221,7 @@ def _approval_note(approved, approval) -> str:
         return (
             "<div style='margin-top:10px;font-size:12px;color:#166534;background:#f0fdf4;"
             "border:1px solid #bbf7d0;border-radius:8px;padding:6px 10px;'>"
-            f"✅ Disetujui dokter dan tersimpan di Data Pasien{detail}.</div>"
+            f"Disetujui dokter dan tersimpan di Data Pasien{detail}.</div>"
         )
     if approved is False:
         return (
@@ -247,7 +247,7 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
         extra += (
             "<div style='margin-top:10px;font-size:12px;color:#92400e;background:#fffbeb;"
             "border:1px solid #fde68a;border-radius:8px;padding:6px 10px;'>"
-            "⚠️ Dukungan keputusan klinis, bukan diagnosis pasti. Kode dicari otomatis dari database "
+            "Dukungan keputusan klinis, bukan diagnosis pasti. Kode dicari otomatis dari database "
             "SNOMED CT (kecocokan terdekat), verifikasi sebelum dipakai. Keputusan akhir ada pada dokter.</div>"
         )
         extra += _approval_note(approved, approval)
@@ -257,7 +257,7 @@ def _ai_bubble(text: str, codes=None, final: bool = False, loading: bool = False
         '<div style="display:flex;align-items:flex-start;margin-bottom:16px;">',
         '<div style="width:32px;height:32px;background-color:#eff6ff;border-radius:50%;display:flex;'
         'align-items:center;justify-content:center;margin-right:10px;color:#2563eb;font-weight:bold;'
-        'font-size:14px;flex-shrink:0;">🤖</div>',
+        'font-size:14px;flex-shrink:0;">AI</div>',
         '<div style="flex:1;">',
         f'<div style="font-size:13px;font-weight:600;color:#16a34a;margin-bottom:4px;">{html.escape(name)}</div>',
         f'<div style="background-color:{bg};border:1px solid {border};border-radius:12px;padding:16px;'
@@ -287,7 +287,7 @@ def _question_bubble(text: str) -> str:
     return "".join([
         '<div style="display:flex;align-items:flex-start;margin-bottom:8px;">',
         '<div style="width:32px;height:32px;background-color:#eff6ff;border-radius:50%;display:flex;'
-        'align-items:center;justify-content:center;margin-right:10px;font-size:14px;flex-shrink:0;">🤖</div>',
+        'align-items:center;justify-content:center;margin-right:10px;font-size:14px;flex-shrink:0;">AI</div>',
         '<div style="background-color:#ffffff;border:1px solid #93c5fd;border-radius:12px;padding:12px 16px;'
         f'font-size:15px;font-weight:600;color:#0f172a;">{html.escape(text)}</div>',
         "</div>",
@@ -341,7 +341,7 @@ def _agent_mode_toggle() -> bool:
     """Saklar di sidebar: aktif = AI boleh memakai tool; nonaktif = mode cepat (1 panggilan AI per pesan)."""
     widget = getattr(st.sidebar, "toggle", None) or st.sidebar.checkbox
     value = widget(
-        "⚡ Mode agent (tool)",
+        ":material/bolt: Mode agent (tool)",
         value=st.session_state.get("agent_pref", True),
         key="agent_toggle",
         help=(
@@ -364,7 +364,7 @@ def _render_red_flags(flags: list):
     if not flags:
         return
     lines = "\n".join(
-        f"- {'🔴' if f['level'] == 'critical' else '🟠'} {f['message']}" for f in flags
+        f"- {':red[●]' if f['level'] == 'critical' else ':orange[●]'} {f['message']}" for f in flags
     )
     box = st.error if any(f["level"] == "critical" for f in flags) else st.warning
     box(f"**Tanda bahaya terdeteksi** (aturan sistem, bukan diagnosis):\n\n{lines}")
@@ -388,9 +388,9 @@ def _render_meta(msg: dict):
     elapsed = msg.get("elapsed_s")
     if elapsed is not None:
         extra = f" • {len(steps)} tool" if steps else ""
-        st.caption(f"⏱ {elapsed:.1f} dtk{extra}")
+        st.caption(f":material/timer: {elapsed:.1f} dtk{extra}")
     if steps:
-        with st.expander(f"🔧 Langkah agent ({len(steps)} tool)"):
+        with st.expander(f":material/build: Langkah agent ({len(steps)} tool)"):
             for step in steps:
                 args = json.dumps(step.get("args") or {}, ensure_ascii=False)
                 st.markdown(f"- **{step.get('tool')}** `{args}` → {step.get('summary', '')} ({step.get('ms', 0)} ms)")
@@ -402,7 +402,7 @@ def _render_meta(msg: dict):
                 seen.add(key)
                 sources.append(src)
     if sources:
-        with st.expander(f"📄 Sumber pedoman ({len(sources)})"):
+        with st.expander(f":material/description: Sumber pedoman ({len(sources)})"):
             st.caption("Klik salah satu untuk membuka dokumen asli dan memverifikasi kutipan.")
             for i, src in enumerate(sources):
                 render_source_button(
@@ -437,11 +437,11 @@ def _render_feedback(patient: dict):
     st.markdown(_question_bubble("Apakah jawaban AI akurat?"), unsafe_allow_html=True)
     col_yes, col_no = st.columns(2)
     with col_yes:
-        if st.button("✅ Ya, akurat", key="fb_yes", use_container_width=True, type="primary"):
+        if st.button(":material/check_circle: Ya, akurat", key="fb_yes", use_container_width=True, type="primary"):
             _approve_last(patient)
             st.rerun()
     with col_no:
-        if st.button("❌ Tidak, buat ulang", key="fb_no", use_container_width=True):
+        if st.button(":material/close: Tidak, buat ulang", key="fb_no", use_container_width=True):
             _reject_last()
             st.rerun()
     st.caption(
@@ -460,7 +460,7 @@ def _process_pending(slot):
     patient_context = build_patient_context(patient["mrn"])
     use_tools = bool(st.session_state.get("agent_pref", True))
 
-    slot.markdown(_ai_bubble("⏳ Menganalisis jawaban pasien...", loading=True), unsafe_allow_html=True)
+    slot.markdown(_ai_bubble("Menganalisis jawaban pasien...", loading=True), unsafe_allow_html=True)
 
     raw, steps, error, last_text = "", [], None, ""
     started = time.perf_counter()
@@ -588,7 +588,7 @@ def render_chat_room():
                 "Anamnesis selesai dan tersimpan di Data Pasien. "
                 "Tambahkan informasi baru di kotak pesan bila ingin memperbarui kesimpulan."
             )
-            if st.button("🗂 Lihat di Data Pasien", key="after_approve_data"):
+            if st.button(":material/folder: Lihat di Data Pasien", key="after_approve_data"):
                 go_to_patient_data(patient["mrn"])
                 st.rerun()
 
@@ -597,8 +597,8 @@ def render_chat_room():
             col_q, col_cancel = st.columns([10, 2])
             with col_q:
                 st.info(
-                    f"❓ **Tanyakan ke pasien:** {active_q}\n\n"
-                    "Ketik atau ucapkan **jawaban pasien** di kotak pesan di bawah (ikon 🎙 di samping tombol kirim)."
+                    f":material/help: **Tanyakan ke pasien:** {active_q}\n\n"
+                    "Ketik atau ucapkan **jawaban pasien** di kotak pesan di bawah (ikon mikrofon di samping tombol kirim)."
                 )
             with col_cancel:
                 if st.button("Batal", key="cancel_q", use_container_width=True):
@@ -628,7 +628,7 @@ def render_chat_room():
                 st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
 
             if has_user_msg and not last_final:
-                if st.button("📋 Minta Kesimpulan Sekarang", key="ask_final"):
+                if st.button(":material/summarize: Minta Kesimpulan Sekarang", key="ask_final"):
                     record = get_patient(patient["mrn"]) or {}
                     an = record.get("anamnesis") or {}
                     complaints = " ".join(c.get("term", "") for c in record.get("chief_complaints") or [])

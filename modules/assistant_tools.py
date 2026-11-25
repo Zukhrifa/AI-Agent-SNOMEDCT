@@ -144,7 +144,7 @@ def tools_prompt() -> str:
 
 
 def tool_label(names) -> str:
-    return "🔎 Membaca data sistem: " + ", ".join(TOOLS[n]["label"] for n in names if n in TOOLS) + "..."
+    return "Membaca data sistem: " + ", ".join(TOOLS[n]["label"] for n in names if n in TOOLS) + "..."
 
 
 _FENCE = re.compile(r"^```(?:json)?|```$", re.MULTILINE)
