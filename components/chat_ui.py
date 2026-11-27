@@ -125,7 +125,8 @@ def _fmt(text: str) -> str:
             continue
         if re.match(r"^#{1,6}\s+", line):
             flush()
-            out.append(f"<div style='font-weight:600;color:#0f172a;margin:6px 0 2px;'>{_fmt_inline(re.sub(r'^#+\s+', '', line))}</div>")
+            _clean = re.sub(r"#+\s+", "", line)
+            out.append(f'<div style="font-weight:600;color:#0f172a;margin:6px 0 2px;">{_fmt_inline(_clean)}</div>')
         elif not line.strip():
             flush()
             out.append("<div style='height:6px;'></div>")
