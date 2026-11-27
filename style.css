@@ -180,3 +180,9 @@ code { background: #F0EEE8; color: var(--text); border-radius: 4px; }
 [data-testid="stAlert"] [data-testid="stAlertContainer"] > div:first-child:has(svg) {
   display: none !important;
 }
+
+/* Bubble pesan pengguna: teks selalu putih (juga saat browser/tema gelap) */
+.user-bubble, .user-bubble * {
+  color: #ffffff !important;
+}
+.user-bubble code { background: rgba(255,255,255,.18) !important; }

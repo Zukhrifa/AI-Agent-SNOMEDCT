@@ -125,8 +125,7 @@ def _fmt(text: str) -> str:
             continue
         if re.match(r"^#{1,6}\s+", line):
             flush()
-            _clean = re.sub(r"#+\s+", "", line)
-            out.append(f'<div style="font-weight:600;color:#0f172a;margin:6px 0 2px;">{_fmt_inline(_clean)}</div>')
+            out.append(f"<div style='font-weight:600;color:#0f172a;margin:6px 0 2px;'>{_fmt_inline(re.sub(r'^#+\s+', '', line))}</div>")
         elif not line.strip():
             flush()
             out.append("<div style='height:6px;'></div>")
@@ -150,7 +149,7 @@ def _user_bubble(msg: dict) -> str:
 
     return (
         '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">'
-        '<div style="background-color:#2b5797;color:white;padding:10px 15px;border-radius:15px;max-width:70%;">'
+        '<div class="user-bubble" style="background-color:#2b5797;color:#ffffff;padding:10px 15px;border-radius:15px;max-width:70%;">'
         f"{body}"
         "</div></div>"
     )

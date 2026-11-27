@@ -112,8 +112,17 @@ _MEDICAL_HINT_RE = re.compile(
 )
 
 
-def scope_problem(text: str):
-    """None bila teks boleh diproses; selain itu pesan untuk pengguna."""
+_BROAD_MEDICAL_RE = re.compile(
+    r"(dosis|terapi|gejala|penyakit|diagnos|klinis|medis|kardio|sop\b|pedoman|kode|istilah|rumah sakit|perawat|dokter|"
+    r"igd|ugd|icd|laborat|lab\b|obat|efek samping|tindakan|operasi|rawat|poli|jadwal|kemarin|hari ini|nama|mrn|"
+    r"beda|apa itu|singkatan|arti|ekg|usg|echo|kateter|stent|bypass|vaksin|nutrisi|infeksi|luka|cairan|infus)",
+    re.IGNORECASE,
+)
+
+
+def scope_problem(text: str, strict: bool = False):
+    """None bila teks boleh diproses; selain itu pesan untuk pengguna.
+    strict=True (Asisten Klinis): pesan >=4 kata tanpa satu pun kata medis/sistem juga ditolak."""
     t = (text or "").strip()
     if not t:
         return None
@@ -121,7 +130,10 @@ def scope_problem(text: str):
         return f"Pesan terlalu panjang (maks {MAX_USER_CHARS} karakter). Ringkas lalu kirim ulang."
     if _INJECTION_RE.search(t):
         return OUT_OF_SCOPE_TEXT
-    if _OFFTOPIC_RE.search(t) and not _MEDICAL_HINT_RE.search(t):
+    medical = _MEDICAL_HINT_RE.search(t) or (strict and _BROAD_MEDICAL_RE.search(t))
+    if _OFFTOPIC_RE.search(t) and not medical:
+        return OUT_OF_SCOPE_TEXT
+    if strict and len(t.split()) >= 4 and not medical:
         return OUT_OF_SCOPE_TEXT
     return None
 
