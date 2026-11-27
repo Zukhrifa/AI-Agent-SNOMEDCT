@@ -186,3 +186,15 @@ code { background: #F0EEE8; color: var(--text); border-radius: 4px; }
   color: #ffffff !important;
 }
 .user-bubble code { background: rgba(255,255,255,.18) !important; }
+/* Biar kolom isi chat tetap terang, walau Dark Mode */
+html[data-theme="dark"] .stApp,
+html[data-theme="dark"] [data-testid="stAppViewContainer"],
+html[data-theme="dark"] [data-testid="stSidebar"],
+html[data-theme="dark"] [data-testid="stHeader"] {
+  background-color: #fafaf8 !important;
+  color: #0f172a !important;
+}
+
+html[data-theme="dark"] [data-testid="stBottom"] {
+  background-color: #fafaf8 !important;
+}
