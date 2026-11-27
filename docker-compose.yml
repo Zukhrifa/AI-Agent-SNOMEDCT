@@ -1,0 +1,25 @@
+# docker-compose.yml — AI Agent SMF Jantung
+# Cara pakai di server (di dalam folder project):
+#   1. Pastikan ada: .env, snomed_cardio_umum_full.csv, requirements.txt,
+#      app.py + folder modules/ dan components/
+#   2. docker compose up -d --build
+#   3. Buka http://192.168.99.29:8501 dari laptop di jaringan yang sama
+#   4. Lihat log: docker compose logs -f
+#   5. Berhenti: docker compose down
+services:
+  ai-agent:
+    build: .
+    container_name: ai-agent-smf
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # chroma_db disimpan di luar image supaya tidak hilang saat rebuild
+      # dan supaya bisa diisi dengan ingest tanpa rebuild image.
+      # Kalau folder ini kosong, aplikasi tetap jalan (pencarian leksikal dari CSV).
+      - ./chroma_db:/app/chroma_db
+      # Kalau TIDAK pakai Turso (pakai SQLite lokal), aktifkan baris ini
+      # supaya database lokal tidak hilang saat container dihapus:
+      # - ./anamnesis_local.db:/app/anamnesis_local.db
+    restart: unless-stopped

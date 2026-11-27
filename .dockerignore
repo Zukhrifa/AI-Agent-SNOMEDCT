@@ -1,0 +1,7 @@
+# .dockerignore — jangan ikutkan file sensitif/data besar ke dalam image
+.env
+.git
+__pycache__/
+*.db
+.streamlit/
+chroma_db/
