@@ -186,20 +186,31 @@ code { background: #F0EEE8; color: var(--text); border-radius: 4px; }
   color: #ffffff !important;
 }
 .user-bubble code { background: rgba(255,255,255,.18) !important; }
-/* Biar kolom isi chat tetap terang, walau Dark Mode */
-.stApp,
-[data-testid="stMain"],
-[data-testid="stAppViewContainer"],
-[data-testid="stSidebar"],
-[data-testid="stBottom"] {
-  background-color: #fafaf8 !important;
-}
 
-html[data-theme="dark"] .stApp,
-html[data-theme="dark"] [data-testid="stMain"],
-html[data-theme="dark"] [data-testid="stAppViewContainer"],
-html[data-theme="dark"] [data-testid="stSidebar"],
-html[data-theme="dark"] [data-testid="stBottom"] {
-  background-color: #fafaf8 !important;
-  color: #0f172a !important;
+/* Tampilan tetap terang walau browser/OS dark mode (tema Streamlit bisa menggelapkan bagian bawah) */
+:root, html, body { color-scheme: light !important; }
+[data-testid="stBottom"],
+[data-testid="stBottom"] > div,
+[data-testid="stBottomBlockContainer"] {
+  background-color: #FAF9F6 !important;
+}
+[data-testid="stChatInput"],
+[data-testid="stChatInput"] > div {
+  background-color: #F3F1EC !important;
+  border-color: #DAD6CC !important;
+}
+[data-testid="stChatInput"] textarea {
+  background-color: transparent !important;
+  color: #1F2328 !important;
+  -webkit-text-fill-color: #1F2328 !important;
+  caret-color: #1F2328 !important;
+}
+[data-testid="stChatInput"] textarea::placeholder {
+  color: #6B7280 !important;
+  -webkit-text-fill-color: #6B7280 !important;
+  opacity: 1 !important;
+}
+[data-testid="stChatInputSubmitButton"] {
+  background-color: #E5E2DA !important;
+  color: #1F2328 !important;
 }
