@@ -1,16 +1,20 @@
-# Tema dasar. Perlu restart `streamlit run` setelah diubah.
-[theme]
+# Tampilan sama persis di mode terang maupun gelap (mengikuti sistem hanya untuk sekitar halaman).
+# Perlu restart/redeploy setelah diubah.
+[theme.light]
 base = "light"
-primaryColor = "#2F5F98"              # biru tenang (bukan biru default / ungu)
-backgroundColor = "#FAF9F6"           # putih tulang hangat
-secondaryBackgroundColor = "#F3F1EC"  # sidebar & panel
+primaryColor = "#2F5F98"
+backgroundColor = "#FAF9F6"
+secondaryBackgroundColor = "#F3F1EC"
 textColor = "#1F2328"
 font = "sans serif"
 
-# Opsional (hanya Streamlit versi baru). Jika muncul peringatan "Unrecognized config option",
-# hapus baris yang bermasalah.
-# baseRadius = "8px"
-# borderColor = "#E4E0D6"
+[theme.dark]
+base = "light"                        # sengaja terang: mode gelap memakai warna yang sama
+primaryColor = "#2F5F98"
+backgroundColor = "#FAF9F6"
+secondaryBackgroundColor = "#F3F1EC"
+textColor = "#1F2328"
+font = "sans serif"
 
 [client]
 toolbarMode = "minimal"
